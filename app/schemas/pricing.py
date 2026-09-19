@@ -1,0 +1,222 @@
+"""Pydantic-схемы запроса и ответа расчёта.
+
+Здесь же вся проверка входных данных: ни одно значение не доходит до
+моделей, не пройдя границы разумного. Дублирование с проверками в
+OptionParams намеренное — схема ловит опечатку на границе HTTP и
+объясняет её пользователю, датакласс защищает саму библиотеку, которую
+можно вызвать и мимо API.
+"""
+
+from datetime import date, datetime
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.pricing.models import (
+    MAX_DIV_YIELD,
+    MAX_RATE,
+    MAX_SIGMA,
+    MIN_RATE,
+    ExerciseStyle,
+    OptionType,
+    PricingModel,
+)
+
+Positive = Annotated[float, Field(gt=0)]
+
+
+class OptionInputs(BaseModel):
+    """Параметры опциона без выбора модели.
+
+    Вынесено в базовый класс: сравнение всех трёх моделей принимает то
+    же самое, но без поля model — там считаются все.
+    """
+
+    # Поле называется model, а не model_name: у pydantic зарезервирован
+    # префикс model_, само слово model конфликта не вызывает, но снимаем
+    # предупреждение явно.
+    model_config = ConfigDict(protected_namespaces=())
+
+    ticker: str = Field(min_length=1, max_length=10)
+
+    spot: Positive = Field(description="Цена базового актива S")
+    strike: Positive = Field(description="Страйк K")
+    expiry: date = Field(description="Дата экспирации")
+
+    option_type: OptionType
+    exercise: ExerciseStyle = ExerciseStyle.EUROPEAN
+
+    sigma: float = Field(gt=0, le=MAX_SIGMA, description="Волатильность, доля единицы")
+    rate: float = Field(ge=MIN_RATE, le=MAX_RATE, description="Безрисковая ставка")
+    # Потолок высокий намеренно: q приходит из формы уже пересчитанным под
+    # конкретную экспирацию, и на коротком сроке дискретная выплата даёт
+    # большую годовую ставку. См. MAX_DIV_YIELD.
+    div_yield: float = Field(
+        ge=0, le=MAX_DIV_YIELD, description="Дивидендная доходность"
+    )
+
+    steps: int = Field(default=500, ge=1, le=5000, description="Шагов дерева")
+    paths: int = Field(default=100_000, ge=1_000, le=5_000_000, description="Путей МК")
+
+    market_as_of: datetime | None = Field(
+        default=None, description="На какой момент актуальны рыночные данные"
+    )
+
+    @model_validator(mode="after")
+    def check_expiry_in_future(self) -> "OptionInputs":
+        if self.expiry <= date.today():
+            raise ValueError(
+                "Дата экспирации должна быть в будущем: при нулевом сроке "
+                "опцион стоит ровно внутреннюю стоимость, а греки не определены"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def check_strike_is_sane(self) -> "OptionInputs":
+        # Страйк в сто раз дальше цены — почти наверняка опечатка в разряде.
+        # Считать такой опцион можно, но цена будет нулём или внутренней
+        # стоимостью, и пользователь решит, что сломался расчёт.
+        ratio = self.strike / self.spot
+        if not 0.01 <= ratio <= 100:
+            raise ValueError(
+                f"Страйк {self.strike:g} отличается от цены {self.spot:g} "
+                "более чем в сто раз — проверьте, не опечатка ли это"
+            )
+        return self
+
+
+class PriceRequest(OptionInputs):
+    """Расчёт одной выбранной моделью."""
+
+    model: PricingModel
+
+    @model_validator(mode="after")
+    def check_model_supports_exercise(self) -> "PriceRequest":
+        if (
+            self.exercise is ExerciseStyle.AMERICAN
+            and self.model is not PricingModel.BINOMIAL
+        ):
+            raise ValueError(
+                "Американский стиль умеет считать только биномиальное дерево. "
+                "Выберите его или переключитесь на европейский стиль"
+            )
+        return self
+
+
+class CompareRequest(OptionInputs):
+    """Расчёт всеми моделями сразу.
+
+    Модель не указывается и стиль не ограничивается: те модели, которым
+    американский не по зубам, вернут причину отказа вместо цены.
+    """
+
+
+class GreeksOut(BaseModel):
+    """Греки в терминальных единицах."""
+
+    delta: float = Field(description="На 1 единицу цены базового актива")
+    gamma: float = Field(description="Изменение delta на 1 единицу цены")
+    vega: float = Field(description="На 1 процентный пункт волатильности")
+    theta: float = Field(description="На 1 календарный день")
+    rho: float = Field(description="На 1 процентный пункт ставки")
+
+
+class PriceMeta(BaseModel):
+    """Как считали: полезно для сравнения моделей между собой."""
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    model: PricingModel
+    exercise: ExerciseStyle
+    elapsed_ms: float
+    days_to_expiry: int
+    time_to_expiry: float = Field(description="Срок в годах, T")
+
+    std_error: float | None = Field(default=None, description="Только Монте-Карло")
+    ci95: tuple[float, float] | None = Field(default=None, description="Только Монте-Карло")
+
+    warning: str | None = Field(
+        default=None,
+        description="Расчёт прошёл, но результату доверять нельзя",
+    )
+
+
+class PriceResponse(BaseModel):
+    price: float
+    greeks: GreeksOut
+    meta: PriceMeta
+
+    # Идентификатор записи в истории. None означает, что расчёт прошёл, а
+    # сохранить его не удалось — база недоступна.
+    calculation_id: int | None = None
+
+
+class ModelComparison(BaseModel):
+    """Строка таблицы сравнения: либо результат, либо причина отказа."""
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    model: PricingModel
+    price: float | None = None
+    greeks: GreeksOut | None = None
+    elapsed_ms: float | None = None
+
+    std_error: float | None = None
+    ci95: tuple[float, float] | None = None
+    warning: str | None = None
+
+    # Заполнено, если модель отказалась считать эти параметры: американский
+    # стиль для Блэка-Шоулза, вырожденное дерево и тому подобное.
+    error: str | None = None
+
+
+class CompareResponse(BaseModel):
+    """Все модели на одних и тех же входных данных."""
+
+    exercise: ExerciseStyle
+    days_to_expiry: int
+    time_to_expiry: float
+    results: list[ModelComparison]
+
+
+class TreeConvergencePoint(BaseModel):
+    """Одна точка на графике сходимости дерева."""
+
+    steps: int
+    price: float
+    error: float = Field(description="Отклонение от точного значения")
+    elapsed_ms: float
+
+
+class MonteCarloConvergencePoint(BaseModel):
+    """Одна точка на графике сходимости Монте-Карло.
+
+    В отличие от дерева здесь есть лента: у случайного метода отклонение
+    имеет смысл только вместе с его собственной оценкой разброса.
+    """
+
+    paths: int
+    price: float
+    error: float
+    std_error: float
+    ci95_low: float
+    ci95_high: float
+    elapsed_ms: float
+
+
+class ConvergenceReport(BaseModel):
+    """Как две приближённые модели подходят к точному значению."""
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    reference: float = Field(description="Точная цена по Блэку-Шоулзу")
+    days_to_expiry: int
+    time_to_expiry: float
+
+    tree: list[TreeConvergencePoint]
+    monte_carlo: list[MonteCarloConvergencePoint]
+
+    skipped_steps: list[int] = Field(
+        default_factory=list,
+        description="Число шагов, при котором дерево отказалось считать",
+    )

@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Прайсинг опционов</title>
+
+  <!-- Значение подставляет сервер при отдаче страницы, см. main.index.
+       Чужая вкладка прочитать его не может: CORS не даёт ей увидеть
+       тело нашего ответа. Нужен для POST /api/instruments/sync. -->
+  <meta name="admin-token" content="">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>Прайсинг опционов</h1>
+    <p class="subtitle">Блэк-Шоулз · биномиальное дерево · Монте-Карло</p>
+  </header>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Базовый актив</h2>
+      <button type="button" id="sync-instruments" class="link">
+        Обновить список с рынка
+      </button>
+    </div>
+
+    <label for="instrument">Акция</label>
+    <select id="instrument" disabled>
+      <option value="">Загрузка…</option>
+    </select>
+
+    <p id="instrument-status" class="status"></p>
+  </section>
+
+  <section class="card" id="market-card" hidden>
+    <div class="card-head">
+      <h2>Рыночные данные</h2>
+      <button type="button" id="refresh-market" class="link">Обновить с рынка</button>
+    </div>
+
+    <dl class="metrics">
+      <div class="metric metric--wide">
+        <dt>Цена базового актива <span class="sym">S</span></dt>
+        <dd id="m-spot">—</dd>
+      </div>
+      <div class="metric">
+        <dt>Волатильность 30д <span class="sym">σ</span></dt>
+        <dd id="m-sigma30">—</dd>
+      </div>
+      <div class="metric">
+        <dt>Волатильность 90д</dt>
+        <dd id="m-sigma90">—</dd>
+      </div>
+      <div class="metric">
+        <dt>Волатильность 252д</dt>
+        <dd id="m-sigma252">—</dd>
+      </div>
+      <div class="metric">
+        <dt>Дивиденды за 12 мес</dt>
+        <dd id="m-div">—</dd>
+      </div>
+      <div class="metric">
+        <dt>Ближайшая отсечка</dt>
+        <dd id="m-exdate">—</dd>
+      </div>
+      <div class="metric">
+        <dt>Безрисковая ставка <span class="sym">r</span></dt>
+        <dd id="m-rate">—</dd>
+      </div>
+      <div class="metric">
+        <dt>Дат экспирации</dt>
+        <dd id="m-expirations">—</dd>
+      </div>
+    </dl>
+
+    <p id="market-note" class="status"></p>
+  </section>
+
+  <section class="card" id="params-card" hidden>
+    <div class="card-head">
+      <h2>Параметры опциона</h2>
+      <button type="button" id="reset-params" class="link">Вернуть рыночные значения</button>
+    </div>
+
+    <form id="params" autocomplete="off">
+      <div class="grid">
+
+        <div class="field">
+          <label for="p-spot">Цена базового актива <span class="sym">S</span></label>
+          <input id="p-spot" type="number" step="0.01" min="0.01" required>
+          <p class="hint">подставлено с рынка</p>
+        </div>
+
+        <div class="field">
+          <label for="p-strike">Страйк <span class="sym">K</span></label>
+          <input id="p-strike" type="number" step="0.01" min="0.01" required>
+          <p class="hint" id="h-moneyness">—</p>
+        </div>
+
+        <div class="field">
+          <label for="p-expiry">Дата экспирации</label>
+          <select id="p-expiry" required></select>
+          <p class="hint" id="h-term">—</p>
+        </div>
+
+        <div class="field">
+          <label>Тип опциона</label>
+          <div class="segmented">
+            <label><input type="radio" name="option_type" value="call" checked><span>Call</span></label>
+            <label><input type="radio" name="option_type" value="put"><span>Put</span></label>
+          </div>
+          <p class="hint">call — право купить, put — право продать</p>
+        </div>
+
+        <div class="field">
+          <label>Стиль исполнения</label>
+          <div class="segmented">
+            <label><input type="radio" name="exercise" value="european" checked><span>Европейский</span></label>
+            <label><input type="radio" name="exercise" value="american"><span>Американский</span></label>
+          </div>
+          <p class="hint" id="h-exercise">исполнение только в дату экспирации</p>
+        </div>
+
+        <div class="field">
+          <label for="p-sigma">Волатильность <span class="sym">σ</span>, % годовых</label>
+          <input id="p-sigma" type="number" step="0.01" min="0.01" required>
+          <p class="hint">
+            из истории:
+            <button type="button" class="link" data-sigma="sigma_30d">30д</button> ·
+            <button type="button" class="link" data-sigma="sigma_90d">90д</button> ·
+            <button type="button" class="link" data-sigma="sigma_252d">252д</button>
+          </p>
+        </div>
+
+        <div class="field">
+          <label for="p-rate">Безрисковая ставка <span class="sym">r</span>, %</label>
+          <input id="p-rate" type="number" step="0.01" required>
+          <p class="hint">13-недельные векселя США (^IRX)</p>
+        </div>
+
+        <div class="field">
+          <label for="p-div">Дивидендная доходность <span class="sym">q</span>, %</label>
+          <input id="p-div" type="number" step="0.01" min="0" required>
+          <p class="hint" id="h-div">выплаты за 12 мес к цене</p>
+        </div>
+
+      </div>
+
+      <h3>Параметры моделей</h3>
+      <div class="grid">
+
+        <div class="field">
+          <label for="p-steps">Шагов биномиального дерева</label>
+          <input id="p-steps" type="number" step="1" min="1" max="5000" value="500" required>
+          <p class="hint">больше шагов — точнее и медленнее</p>
+        </div>
+
+        <div class="field">
+          <label for="p-paths">Путей Монте-Карло</label>
+          <input id="p-paths" type="number" step="1000" min="1000" max="5000000" value="100000" required>
+          <p class="hint">ошибка падает как корень из числа путей</p>
+        </div>
+
+      </div>
+
+      <p id="params-status" class="status"></p>
+    </form>
+  </section>
+
+  <section class="card" id="calc-card" hidden>
+    <h2>Модель расчёта</h2>
+
+    <div class="buttons">
+      <button type="button" class="btn btn--active" data-model="black_scholes">
+        Блэк-Шоулз
+      </button>
+      <button type="button" class="btn" data-model="binomial">
+        Биномиальное дерево
+      </button>
+      <button type="button" class="btn" data-model="monte_carlo">
+        Монте-Карло
+      </button>
+    </div>
+
+    <button type="button" id="calculate" class="btn btn--primary btn--wide">
+      Рассчитать
+    </button>
+
+    <button type="button" id="compare" class="btn btn--wide">
+      Сравнить все три модели
+    </button>
+
+    <p id="calc-status" class="status"></p>
+  </section>
+
+  <section class="card" id="result-card" hidden>
+    <div class="card-head">
+      <h2>Результат</h2>
+      <span class="badge" id="r-model">—</span>
+    </div>
+
+    <p class="warning" id="r-warning" hidden></p>
+
+    <div class="price-block">
+      <div class="price-label">Цена опциона</div>
+      <div class="price-value" id="r-price">—</div>
+      <div class="price-note" id="r-note">—</div>
+    </div>
+
+    <h3>Греки</h3>
+    <dl class="metrics">
+      <div class="metric">
+        <dt>Delta <span class="sym">Δ</span></dt>
+        <dd id="g-delta">—</dd>
+        <p class="hint">на 1 единицу цены акции</p>
+      </div>
+      <div class="metric">
+        <dt>Gamma <span class="sym">Γ</span></dt>
+        <dd id="g-gamma">—</dd>
+        <p class="hint">изменение delta на 1 единицу цены</p>
+      </div>
+      <div class="metric">
+        <dt>Vega <span class="sym">ν</span></dt>
+        <dd id="g-vega">—</dd>
+        <p class="hint">на 1 п.п. волатильности</p>
+      </div>
+      <div class="metric">
+        <dt>Theta <span class="sym">Θ</span></dt>
+        <dd id="g-theta">—</dd>
+        <p class="hint">за один календарный день</p>
+      </div>
+      <div class="metric">
+        <dt>Rho <span class="sym">ρ</span></dt>
+        <dd id="g-rho">—</dd>
+        <p class="hint">на 1 п.п. ставки</p>
+      </div>
+    </dl>
+
+    <p id="r-meta" class="status"></p>
+  </section>
+
+  <section class="card" id="compare-card" hidden>
+    <h2>Сравнение моделей</h2>
+
+    <div class="table-scroll">
+      <table id="compare-table">
+        <thead>
+          <tr>
+            <th>Модель</th>
+            <th class="num">Цена</th>
+            <th class="num">Расхождение</th>
+            <th class="num">Δ</th>
+            <th class="num">Γ</th>
+            <th class="num">ν</th>
+            <th class="num">Θ</th>
+            <th class="num">ρ</th>
+            <th class="num">мс</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <p id="compare-note" class="status"></p>
+  </section>
+
+  <section class="card" id="convergence-card" hidden>
+    <div class="card-head">
+      <h2>Сходимость моделей</h2>
+      <button type="button" id="load-convergence" class="link">
+        Построить сходимость
+      </button>
+    </div>
+
+    <figure class="chart" id="conv-tree" hidden>
+      <figcaption>Биномиальное дерево: цена по числу шагов</figcaption>
+      <div class="plot" id="conv-tree-plot"></div>
+    </figure>
+
+    <figure class="chart" id="conv-mc" hidden>
+      <figcaption>Монте-Карло: цена и 95% интервал по числу путей</figcaption>
+      <div class="plot" id="conv-mc-plot"></div>
+    </figure>
+
+    <p id="convergence-note" class="status"></p>
+  </section>
+
+  <section class="card" id="chain-card" hidden>
+    <div class="card-head">
+      <h2>Подразумеваемая волатильность</h2>
+      <button type="button" id="load-chain" class="link">Загрузить цепочку</button>
+    </div>
+
+    <figure class="chart" id="smile" hidden>
+      <figcaption id="smile-caption">Улыбка волатильности</figcaption>
+
+      <div class="plot" id="smile-plot"></div>
+    </figure>
+
+    <details id="chain-details">
+      <summary>Таблица значений</summary>
+
+    <div class="table-scroll">
+      <table id="chain-table">
+        <thead>
+          <tr>
+            <th class="num">Страйк</th>
+            <th>Тип</th>
+            <th class="num">bid</th>
+            <th class="num">ask</th>
+            <th class="num">mid</th>
+            <th class="num">Наша IV</th>
+            <th class="num">Yahoo IV</th>
+            <th class="num">ln(K/F)</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    </details>
+
+    <p id="chain-note" class="status"></p>
+  </section>
+
+  <section class="card" id="parity-card" hidden>
+    <div class="card-head">
+      <h2>Сверка с рынком</h2>
+      <button type="button" id="load-parity" class="link">Сверить</button>
+    </div>
+
+    <p class="hint">
+      Паритет колла и пута: для пары на одном страйке рынок обязан держать
+      C&nbsp;−&nbsp;P&nbsp;=&nbsp;S·e<sup>−qT</sup>&nbsp;−&nbsp;K·e<sup>−rT</sup>.
+      Слева — чистые рыночные цены, справа — наши спот, ставка и дивиденды.
+      Волатильность в равенство не входит, поэтому проверяются именно
+      входные данные, а не модели.
+    </p>
+
+    <div id="parity-summary" hidden>
+      <dl class="metrics">
+        <div class="metric">
+          <dt>Форвард по нашим данным</dt>
+          <dd id="pa-forward-ours">—</dd>
+        </div>
+        <div class="metric">
+          <dt>Форвард по рынку</dt>
+          <dd id="pa-forward-market">—</dd>
+        </div>
+        <div class="metric">
+          <dt>Наше <span class="sym">q</span></dt>
+          <dd id="pa-div-ours">—</dd>
+        </div>
+        <div class="metric">
+          <dt>Рыночное <span class="sym">q</span></dt>
+          <dd id="pa-div-market">—</dd>
+        </div>
+        <div class="metric">
+          <dt>Сошлось страйков</dt>
+          <dd id="pa-agreed">—</dd>
+        </div>
+      </dl>
+
+      <p id="parity-verdict" class="status"></p>
+
+      <details id="parity-details">
+        <summary>Таблица значений</summary>
+
+        <div class="table-scroll">
+          <table id="parity-table">
+            <thead>
+              <tr>
+                <th class="num">Страйк</th>
+                <th class="num">Колл</th>
+                <th class="num">Пут</th>
+                <th class="num">C − P рынок</th>
+                <th class="num">По нашим данным</th>
+                <th class="num">Расхождение</th>
+                <th class="num">Допуск</th>
+                <th class="num">Форвард</th>
+                <th>Вердикт</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </details>
+    </div>
+
+    <p id="parity-note" class="status"></p>
+  </section>
+
+  <!-- Урезанная сборка Plotly: scatter есть, 3D и карт нет. Лежит в
+       проекте файлом, а не грузится с CDN, чтобы страница открывалась
+       без интернета. -->
+  <script src="/static/vendor/plotly-basic.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
