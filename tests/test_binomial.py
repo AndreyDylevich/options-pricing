@@ -1,4 +1,6 @@
-"""Биномиальное дерево: сходимость к Блэку-Шоулзу и раннее исполнение."""
+"""Биномиальное дерево: проверяем сходимость к Блэку-Шоулзу с ростом числа
+шагов и что американский опцион стоит не меньше европейского.
+"""
 
 from dataclasses import replace
 
@@ -14,11 +16,9 @@ def test_converges_to_black_scholes(atm_call: OptionParams) -> None:
 
 
 def test_error_halves_when_steps_double(atm_call: OptionParams) -> None:
-    """Ошибка CRR убывает как 1/steps.
-
-    Проверяем именно порядок сходимости, а не абсолютное значение: он
-    ломается при неверных u, d или p, даже если цена на глаз похожа.
-    """
+    # Ошибка CRR убывает как 1/steps. Проверяем именно порядок сходимости,
+    # а не абсолютное значение: он ломается при неверных u, d или p, даже
+    # если цена на глаз похожа.
     exact = bs.price(atm_call)
     coarse = abs(bt.price(atm_call, steps=500) - exact)
     fine = abs(bt.price(atm_call, steps=1000) - exact)
@@ -28,11 +28,9 @@ def test_error_halves_when_steps_double(atm_call: OptionParams) -> None:
 def test_american_call_without_dividends_equals_european(
     atm_call: OptionParams,
 ) -> None:
-    """Досрочно исполнять колл на бумагу без дивидендов невыгодно никогда.
-
-    Строгое равенство: ветка раннего исполнения не должна ничего менять
-    там, где права на него не пользуются.
-    """
+    # Досрочно исполнять колл на бумагу без дивидендов невыгодно никогда.
+    # Строгое равенство: ветка раннего исполнения не должна ничего менять
+    # там, где права на него не пользуются.
     european = replace(atm_call, div_yield=0.0)
     american = replace(european, exercise=ExerciseStyle.AMERICAN)
     assert bt.price(american, steps=500) == pytest.approx(
@@ -61,12 +59,12 @@ def test_steps_outside_limits_are_rejected(atm_call: OptionParams, steps: int) -
 
 
 def test_probability_out_of_range_is_reported(atm_call: OptionParams) -> None:
-    """При крошечной волатильности снос за шаг не покрывается движениями."""
+    # При крошечной волатильности снос за шаг не покрывается движениями.
     with pytest.raises(bt.InvalidTreeParameters, match="вероятность"):
         bt.price(replace(atm_call, sigma=1e-4), steps=500)
 
 
 def test_single_step_still_prices(atm_call: OptionParams) -> None:
-    """Одношаговое дерево — грубо, но не должно падать."""
+    # Одношаговое дерево — грубо, но не должно падать.
     result = bt.calculate(atm_call, steps=1)
     assert result.price > 0

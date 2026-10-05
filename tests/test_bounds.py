@@ -1,7 +1,6 @@
-"""Границы отсутствия арбитража — проверка результата, а не входа.
-
-Единственный тест, который ловит ошибку в самой формуле: никакие
-параметры не могут дать цену выше потолка или ниже пола.
+"""Границы отсутствия арбитража: проверяем, что все три модели на любых
+разумных параметрах дают цену внутри них. Единственный тест, который ловит
+ошибку в самой формуле, а не во входных данных.
 """
 
 import pytest
@@ -34,14 +33,14 @@ def test_binomial_within_bounds(params: OptionParams) -> None:
 
 @pytest.mark.parametrize("params", EUROPEAN_GRID, ids=str)
 def test_monte_carlo_within_bounds_or_warns(params: OptionParams) -> None:
-    """Монте-Карло вправе выйти за границы из-за шума, но обязан сказать."""
+    # Монте-Карло вправе выйти за границы из-за шума, но обязан сказать.
     result = mc.calculate(params, paths=20_000)
     if bounds.violation(params, result.price) is not None:
         assert result.warning is not None
 
 
 def test_bounds_are_tight_for_deep_in_the_money(atm_call: OptionParams) -> None:
-    """Глубоко в деньгах цена прижимается к нижней границе."""
+    # Глубоко в деньгах цена прижимается к нижней границе.
     from dataclasses import replace
 
     # При страйке в сто раз ниже цены исполнение практически гарантировано,
@@ -53,7 +52,7 @@ def test_bounds_are_tight_for_deep_in_the_money(atm_call: OptionParams) -> None:
 
 
 def test_violation_is_detected() -> None:
-    """Сама проверка должна срабатывать, а не молчать всегда."""
+    # Сама проверка должна срабатывать, а не молчать всегда.
     from app.pricing.models import OptionType
 
     params = OptionParams(

@@ -1,23 +1,7 @@
-"""Биномиальное дерево Кокса-Росса-Рубинштейна.
-
-За один шаг dt цена либо растёт в u раз, либо падает в d раз:
-
-    dt = T / steps
-    u  = exp(sigma * sqrt(dt))
-    d  = 1 / u
-    p  = (exp((r - q) * dt) - d) / (u - d)
-
-p — риск-нейтральная вероятность роста, а не реальная: она подобрана так,
-чтобы дисконтированная цена актива была мартингалом.
-
-Дерево не материализуется целиком. При обратном проходе нужен только
-текущий слой, а цена акции в любом узле считается как S * u**(2j - i),
-поэтому память O(steps), а не O(steps**2).
-
-Греки: delta, gamma и theta снимаются с узлов первых трёх слоёв, которые
-и так посчитаны обратным проходом. Vega и rho — численно, пересчётом
-дерева со сдвинутыми sigma и r: узлов, где меняются эти параметры, в
-дереве нет.
+"""Биномиальное дерево Кокса-Росса-Рубинштейна: считаем цену обратным проходом
+от выплаты в экспирации к текущему моменту. Единственная модель в проекте,
+умеющая американский стиль — на каждом шаге проверяет, не выгодно ли
+исполнить опцион досрочно.
 """
 
 import time
@@ -47,13 +31,15 @@ DAYS_IN_YEAR = 365.0
 GREEK_LAYERS = 2
 
 
+# Дерево с такими параметрами не имеет смысла.
 class InvalidTreeParameters(Exception):
-    """Дерево с такими параметрами не имеет смысла."""
+    pass
 
 
 def calculate(params: OptionParams, steps: int = DEFAULT_STEPS) -> PricingResult:
-    """Цена и греки. Всего пять построений дерева: одно основное и по два
-    на vega и rho."""
+    # Всего пять построений дерева: одно основное и по два на vega и rho.
+    # Delta, gamma и theta пересчёта не требуют — они снимаются с узлов,
+    # которые обратный проход и так посчитал.
     started = time.perf_counter()
 
     tree = _run_tree(params, steps)
@@ -88,13 +74,9 @@ def price(params: OptionParams, steps: int = DEFAULT_STEPS) -> float:
     return _run_tree(params, steps).price
 
 
+# Цена в корне и греки, снятые с узлов. delta, gamma и theta равны None,
+# если шагов меньше двух: узлов для разностей просто нет.
 class _TreeResult:
-    """Цена в корне и греки, снятые с узлов дерева.
-
-    delta, gamma и theta равны None, если шагов меньше двух: узлов для
-    разностей просто нет.
-    """
-
     __slots__ = ("price", "delta", "gamma", "theta")
 
     def __init__(
@@ -124,6 +106,12 @@ def _run_tree(params: OptionParams, steps: int) -> _TreeResult:
     if params.time_to_expiry <= 0:
         return _TreeResult(params.intrinsic_value)
 
+    # За один шаг цена либо растёт в up раз, либо падает в down раз:
+    #   u = exp(sigma * sqrt(dt)),  d = 1/u
+    #   p = (exp((r - q) * dt) - d) / (u - d)
+    #
+    # p — вероятность риск-нейтральная, а не реальная: она подобрана так,
+    # чтобы дисконтированная цена актива была мартингалом.
     dt = params.time_to_expiry / steps
     up = np.exp(params.sigma * np.sqrt(dt))
     down = 1 / up
@@ -137,6 +125,9 @@ def _run_tree(params: OptionParams, steps: int) -> _TreeResult:
     # Последний слой: выплата в момент экспирации.
     values = _payoff(params, _spot_layer(params.spot, up, steps))
 
+    # Дерево не материализуется целиком: при обратном проходе нужен только
+    # текущий слой, поэтому память O(steps), а не O(steps**2). Храним лишь
+    # первые три слоя — с них снимаются греки.
     layers: dict[int, np.ndarray] = {}
 
     for step in range(steps - 1, -1, -1):
@@ -163,18 +154,15 @@ def _run_tree(params: OptionParams, steps: int) -> _TreeResult:
     )
 
 
+# Цены акции во всех узлах слоя. В узле j было j движений вверх и step - j
+# вниз, а так как d = 1/u, множитель равен u**(j - (step - j)) = u**(2j - step).
 def _spot_layer(spot: float, up: float, step: int) -> np.ndarray:
-    """Цены акции во всех узлах слоя.
-
-    В узле j было j движений вверх и step - j вниз, а так как d = 1/u, то
-    множитель равен u**(j - (step - j)) = u**(2j - step).
-    """
     exponents = 2 * np.arange(step + 1) - step
     return spot * up**exponents
 
 
+# Выплата при немедленном исполнении в каждом узле слоя.
 def _payoff(params: OptionParams, spot: np.ndarray) -> np.ndarray:
-    """Выплата при немедленном исполнении в каждом узле слоя."""
     if params.is_call:
         return np.maximum(spot - params.strike, 0.0)
     return np.maximum(params.strike - spot, 0.0)
@@ -183,17 +171,15 @@ def _payoff(params: OptionParams, spot: np.ndarray) -> np.ndarray:
 def _delta_from_tree(
     layer: np.ndarray, spot: float, up: float, down: float
 ) -> float:
-    """Отношение разности цен опциона к разности цен акции на первом шаге."""
+    # Разность цен опциона на разность цен акции на первом шаге.
     return float((layer[1] - layer[0]) / (spot * up - spot * down))
 
 
 def _gamma_from_tree(
     layer: np.ndarray, spot: float, up: float, down: float
 ) -> float:
-    """Вторая разность по трём узлам второго шага.
-
-    Средний узел вернулся в исходную цену: u * d = 1.
-    """
+    # Вторая разность по трём узлам второго шага. Средний из них вернулся в
+    # исходную цену, потому что u * d = 1.
     spot_up, spot_mid, spot_down = spot * up**2, spot, spot * down**2
 
     delta_up = (layer[2] - layer[1]) / (spot_up - spot_mid)
@@ -203,26 +189,20 @@ def _gamma_from_tree(
 
 
 def _theta_from_tree(layer: np.ndarray, root: float, dt: float) -> float:
-    """Изменение цены за календарный день.
-
-    Средний узел второго шага стоит на той же цене акции, что и корень, но
-    до экспирации ему остаётся на 2 * dt меньше. Разность между ними — это
-    и есть распад во времени, без всякого пересчёта.
-    """
+    # Средний узел второго шага стоит на той же цене акции, что и корень, но
+    # до экспирации ему остаётся на 2 * dt меньше. Разность между ними и
+    # есть распад во времени, без всякого пересчёта.
     per_year = (layer[1] - root) / (2 * dt)
     return float(per_year / DAYS_IN_YEAR)
 
 
+# p вне [0, 1] — это уже не вероятность. Случается, когда снос за шаг
+# (r - q) * dt выходит за пределы, достижимые движениями вверх и вниз, то
+# есть примерно за 2 * sigma * sqrt(dt). Отсюда и оценка нужного числа шагов
+# ниже: условие сводится к dt < (2 * sigma / |r - q|)**2.
 def _check_probability(
     prob_up: float, steps: int, params: OptionParams
 ) -> None:
-    """p вне [0, 1] — это уже не вероятность.
-
-    Случается, когда снос за шаг (r - q) * dt выходит за пределы, которые
-    достижимы движениями вверх и вниз, то есть примерно за 2 * sigma *
-    sqrt(dt). Отсюда и оценка нужного числа шагов ниже: условие
-    сводится к dt < (2 * sigma / |r - q|)**2.
-    """
     if 0 <= prob_up <= 1:
         return
 

@@ -1,19 +1,6 @@
-"""Границы отсутствия арбитража.
-
-Проверка не входных данных, а результата. Никакие параметры не могут
-привести к цене выше потолка или ниже пола: если это случилось, ошибка не
-у пользователя, а в самой модели.
-
-Это единственная проверка во всём проекте, которая ловит опечатку в
-формуле, а не опечатку в форме.
-
-Европейский опцион:
-    колл:  max(S*exp(-qT) - K*exp(-rT), 0)  <=  C  <=  S*exp(-qT)
-    пут:   max(K*exp(-rT) - S*exp(-qT), 0)  <=  P  <=  K*exp(-rT)
-
-Американский стоит не меньше немедленного исполнения и не больше самого
-актива (колл) или страйка (пут): дисконтировать нечего, исполнить можно
-хоть сейчас.
+"""Границы отсутствия арбитража: считаем, в каком промежутке обязана лежать
+цена опциона, и ловим выход за него. Единственная проверка в проекте,
+которая находит ошибку в формуле, а не в заполненной форме.
 """
 
 from math import exp
@@ -26,8 +13,10 @@ RELATIVE_TOLERANCE = 1e-9
 ABSOLUTE_TOLERANCE = 1e-9
 
 
+# Для европейского опциона границы такие:
+#   колл:  max(S*exp(-qT) - K*exp(-rT), 0)  <=  C  <=  S*exp(-qT)
+#   пут:   max(K*exp(-rT) - S*exp(-qT), 0)  <=  P  <=  K*exp(-rT)
 def price_bounds(params: OptionParams) -> tuple[float, float]:
-    """Нижняя и верхняя границы цены для этих параметров."""
     tau = params.time_to_expiry
     spot_pv = params.spot * exp(-params.div_yield * tau)
     strike_pv = params.strike * exp(-params.rate * tau)
@@ -38,8 +27,9 @@ def price_bounds(params: OptionParams) -> tuple[float, float]:
         lower, upper = max(strike_pv - spot_pv, 0.0), strike_pv
 
     if params.exercise is ExerciseStyle.AMERICAN:
-        # Право исполнить сейчас поднимает пол до внутренней стоимости и
-        # снимает дисконтирование с потолка.
+        # Американский стоит не меньше немедленного исполнения и не больше
+        # самого актива (колл) или страйка (пут): право исполнить сейчас
+        # поднимает пол до внутренней стоимости, а дисконтировать нечего.
         lower = max(lower, params.intrinsic_value)
         upper = params.spot if params.is_call else params.strike
 
@@ -47,7 +37,6 @@ def price_bounds(params: OptionParams) -> tuple[float, float]:
 
 
 def violation(params: OptionParams, price: float) -> str | None:
-    """Описание нарушения или None, если цена в границах."""
     lower, upper = price_bounds(params)
     tolerance = ABSOLUTE_TOLERANCE + RELATIVE_TOLERANCE * params.spot
 
@@ -62,14 +51,11 @@ def violation(params: OptionParams, price: float) -> str | None:
     return None
 
 
+# Для аналитических и решёточных методов нарушение означает ошибку в коде,
+# поэтому останавливаемся. Монте-Карло вызывает не это, а violation(): у
+# него отклонение может быть следствием случайного шума, и честнее
+# предупредить, чем упасть.
 def require_within_bounds(params: OptionParams, price: float, model: str) -> None:
-    """Бросить исключение, если цена вне границ.
-
-    Для аналитических и решёточных методов нарушение означает ошибку в
-    коде, поэтому останавливаемся. Монте-Карло вызывает не это, а
-    violation(): у него отклонение может быть следствием случайного шума,
-    и честнее предупредить, чем упасть.
-    """
     problem = violation(params, price)
     if problem is not None:
         raise PriceOutOfBounds(f"{model}: {problem}")

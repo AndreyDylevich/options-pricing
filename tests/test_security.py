@@ -1,13 +1,5 @@
-"""Защита эндпоинтов, меняющих состояние.
-
-Поводом была настоящая дыра: `POST /api/instruments/sync` не требовал
-ничего, а флаг `replace=true` удалял из справочника всё, чего нет в
-новом ответе скринера, — вместе с рыночными снимками, которые уходили
-каскадом по внешнему ключу. Сервер слушает localhost, но послать на него
-POST может любая страница, открытая в браузере пользователя.
-
-Тесты здесь сторожат оба принятых решения: удаления через HTTP больше
-нет вовсе, а на то, что осталось, нужен токен.
+"""Защита эндпоинтов, меняющих состояние: проверяем, что без токена запрос не
+проходит и до скринера не доходит, а удаления бумаг через HTTP не осталось.
 """
 
 import pytest
@@ -27,11 +19,9 @@ def client() -> TestClient:
 
 @pytest.fixture
 def screener(monkeypatch):
-    """Подменяем скринер: тест про доступ, а не про поход в сеть.
-
-    Считаем вызовы — по ним видно, дошёл ли запрос до работы или его
-    отбили на входе.
-    """
+    # Подменяем скринер: тест про доступ, а не про поход в сеть. Считаем
+    # вызовы — по ним видно, дошёл ли запрос до работы или его отбили на
+    # входе.
     from app.schemas.instruments import Instrument
     from app.services import market_data
 
@@ -76,12 +66,10 @@ class TestSyncNeedsToken:
         assert screener["count"] == 1
 
     def test_empty_token_is_refused(self, client: TestClient, screener) -> None:
-        """Пустой заголовок — не то же самое, что верный токен.
-
-        Сравнение идёт со случайной строкой, и пустая ей не равна, но
-        проверить стоит: незаданный ADMIN_TOKEN не должен превращаться в
-        «пускать всех с пустым заголовком».
-        """
+        # Пустой заголовок — не то же самое, что верный токен.
+        # Сравнение идёт со случайной строкой, и пустая ей не равна,
+        # но проверить стоит: незаданный ADMIN_TOKEN не должен
+        # превращаться в «пускать всех с пустым заголовком».
         response = client.post(SYNC, headers={HEADER_NAME: ""})
 
         assert response.status_code == 403
@@ -89,16 +77,15 @@ class TestSyncNeedsToken:
 
 
 class TestSyncCannotDelete:
-    """Удаления через HTTP не осталось — это главная часть починки."""
+    # Удаления через HTTP не осталось — это главная часть починки.
 
     def test_replace_parameter_is_gone(
         self, client: TestClient, screener, database
     ) -> None:
-        """Старая атака: ?count=1&replace=true оставляла одну бумагу.
-
-        Лишний параметр запроса FastAPI молча игнорирует, поэтому важен
-        не код ответа, а то, что до репозитория флаг не доедет.
-        """
+        # Старая атака: ?count=1&replace=true оставляла одну бумагу.
+        # Лишний параметр запроса FastAPI молча игнорирует, поэтому
+        # важен не код ответа, а то, что до репозитория флаг не
+        # доедет.
         from app.db import repository
 
         seen = {}
@@ -120,7 +107,7 @@ class TestSyncCannotDelete:
         assert seen["replace"] is False
 
     def test_schema_does_not_advertise_replace(self, client: TestClient) -> None:
-        """И в документации API его тоже нет — незачем подсказывать."""
+        # И в документации API его тоже нет — незачем подсказывать.
         schema = client.get("/openapi.json").json()
         parameters = schema["paths"]["/api/instruments/sync"]["post"]["parameters"]
 
@@ -129,20 +116,21 @@ class TestSyncCannotDelete:
 
 class TestTokenReachesThePage:
     def test_page_carries_the_token(self, client: TestClient) -> None:
-        """Страница получает токен мета-тегом, иначе кнопка не сработает."""
+        # Страница получает токен мета-тегом, иначе кнопка не
+        # сработает.
         page = client.get("/").text
 
         assert f'content="{admin_token()}"' in page
 
     def test_placeholder_is_not_served_empty(self, client: TestClient) -> None:
-        """Пустая заготовка не должна доезжать до браузера."""
+        # Пустая заготовка не должна доезжать до браузера.
         page = client.get("/").text
 
         assert 'name="admin-token" content=""' not in page
 
 
 def test_token_comes_from_settings_when_set(monkeypatch) -> None:
-    """Заданный в .env токен перевешивает случайный."""
+    # Заданный в .env токен перевешивает случайный.
     from app.config import settings
 
     monkeypatch.setattr(settings, "admin_token", "постоянный-токен")

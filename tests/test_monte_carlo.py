@@ -1,4 +1,6 @@
-"""Монте-Карло: попадание в доверительный интервал и честность оценки."""
+"""Монте-Карло: проверяем попадание в доверительный интервал вокруг цены
+Блэка-Шоулза и что оценка честно сообщает о своей погрешности.
+"""
 
 from dataclasses import replace
 
@@ -10,11 +12,9 @@ from app.pricing.models import AmericanNotSupported, ExerciseStyle, OptionParams
 
 
 def test_within_three_standard_errors(atm_call: OptionParams) -> None:
-    """Правильный критерий для случайного метода — не абсолютная ошибка.
-
-    Оценка обязана попасть в окрестность точного значения шириной в три
-    стандартные ошибки, которые модель считает сама.
-    """
+    # Правильный критерий для случайного метода — не абсолютная ошибка.
+    # Оценка обязана попасть в окрестность точного значения шириной в три
+    # стандартные ошибки, которые модель считает сама.
     result = mc.calculate(atm_call, paths=200_000)
     exact = bs.price(atm_call)
     assert abs(result.price - exact) < 3 * result.std_error
@@ -27,28 +27,26 @@ def test_confidence_interval_contains_exact_value(atm_call: OptionParams) -> Non
 
 
 def test_standard_error_falls_as_square_root(atm_call: OptionParams) -> None:
-    """В сто раз больше путей — в десять раз меньше ошибка."""
+    # В сто раз больше путей — в десять раз меньше ошибка.
     small = mc.calculate(atm_call, paths=10_000).std_error
     large = mc.calculate(atm_call, paths=1_000_000).std_error
     assert large == pytest.approx(small / 10, rel=0.25)
 
 
 def test_same_parameters_give_same_price(atm_call: OptionParams) -> None:
-    """Seed фиксирован: цена не должна дрожать между вызовами."""
+    # Seed фиксирован: цена не должна дрожать между вызовами.
     assert mc.price(atm_call, paths=50_000) == mc.price(atm_call, paths=50_000)
 
 
 def test_put_call_parity_on_the_sample(
     atm_call: OptionParams, atm_put: OptionParams
 ) -> None:
-    """C - P = exp(-rT) * (среднее S_T - K) — точно, а не приближённо.
-
-    Полный паритет C - P = S*exp(-qT) - K*exp(-rT) на конечной выборке не
-    выполняется: среднее разыгранных S_T отличается от форварда на
-    случайную величину. А вот тождество для той же выборки обязано
-    выполняться до последнего знака — колл и пут считаются на одном
-    массиве Z, и max(x, 0) - max(-x, 0) = x поточечно.
-    """
+    # C - P = exp(-rT) * (среднее S_T - K) — точно, а не приближённо.
+    # Полный паритет C - P = S*exp(-qT) - K*exp(-rT) на конечной выборке
+    # не выполняется: среднее разыгранных S_T отличается от форварда на
+    # случайную величину. А вот тождество для той же выборки обязано
+    # выполняться до последнего знака — колл и пут считаются на одном
+    # массиве Z, и max(x, 0) - max(-x, 0) = x поточечно.
     import numpy as np
 
     tau = atm_call.time_to_expiry
@@ -66,11 +64,9 @@ def test_put_call_parity_on_the_sample(
 
 
 def test_sample_forward_is_close_to_true_forward(atm_call: OptionParams) -> None:
-    """Мартингальное свойство: среднее S_T сходится к форварду.
-
-    Именно из-за конечной точности этого равенства паритет выше и
-    приходится проверять на выборке, а не в теории.
-    """
+    # Мартингальное свойство: среднее S_T сходится к форварду. Именно из-
+    # за конечной точности этого равенства паритет выше и приходится
+    # проверять на выборке, а не в теории.
     import numpy as np
 
     tau = atm_call.time_to_expiry
@@ -99,7 +95,7 @@ def test_american_is_rejected(atm_call: OptionParams) -> None:
 
 
 def test_at_expiry_skips_simulation(atm_call: OptionParams) -> None:
-    """T = 0: разыгрывать нечего, цена равна внутренней стоимости."""
+    # T = 0: разыгрывать нечего, цена равна внутренней стоимости.
     result = mc.calculate(replace(atm_call, time_to_expiry=0.0, spot=120.0))
     assert result.price == pytest.approx(20.0)
     assert result.std_error == 0.0
@@ -109,7 +105,7 @@ def test_at_expiry_skips_simulation(atm_call: OptionParams) -> None:
 def test_quality_warning_appears_on_extreme_volatility(
     atm_call: OptionParams,
 ) -> None:
-    """При sigma 490% оценка разъезжается — модель обязана об этом сказать."""
+    # При sigma 490% оценка разъезжается — модель обязана об этом сказать.
     result = mc.calculate(replace(atm_call, sigma=4.9), paths=100_000)
     assert result.warning is not None
 

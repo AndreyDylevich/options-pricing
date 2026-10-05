@@ -1,7 +1,5 @@
-"""Чтение и запись справочников, рыночных снимков и истории расчётов.
-
-Отделено от pricing_service намеренно: расчёт не должен зависеть от того,
-доступна ли база. Если запись упадёт, цена всё равно вернётся пользователю.
+"""Запросы к PostgreSQL: записать расчёт, сохранить рыночный снимок, выдать
+список бумаг. Ничего не считает — только читает и пишет.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -20,7 +18,6 @@ from app.schemas.pricing import PriceRequest, PriceResponse
 async def save_calculation(
     session: AsyncSession, request: PriceRequest, response: PriceResponse
 ) -> int:
-    """Записать расчёт, вернуть его идентификатор."""
     meta, greeks = response.meta, response.greeks
 
     row = Calculation(
@@ -55,18 +52,14 @@ async def save_calculation(
     return row.id
 
 
+# История наружу не отдаётся — её смотрят прямо в PostgreSQL, и держать там
+# месяцы отладочных прогонов незачем: таблица растёт от каждого нажатия
+# «Рассчитать» и от каждого прогона тестов. Отсчёт ведём от текущего момента
+# в UTC, как и `created_at`: возьми мы naive-время, сравнение с колонкой
+# timestamptz упало бы.
 async def purge_old_calculations(
     session: AsyncSession, retention_days: int | None = None
 ) -> int:
-    """Удалить расчёты старше срока хранения. Возвращает число удалённых.
-
-    История наружу не отдаётся — её смотрят прямо в PostgreSQL, и держать
-    там месяцы отладочных прогонов незачем: таблица растёт от каждого
-    нажатия «Рассчитать» и от каждого прогона тестов.
-
-    Отсчёт ведём от текущего момента в UTC, как и `created_at`: возьми мы
-    naive-время, сравнение с колонкой timestamptz упало бы.
-    """
     days = (
         settings.calculation_retention_days if retention_days is None else retention_days
     )
@@ -80,12 +73,9 @@ async def purge_old_calculations(
     return result.rowcount or 0
 
 
+# Сохраняем лишь то, что реально повлияло на результат: число шагов не имеет
+# смысла в записи о расчёте по Блэку-Шоулзу.
 def _model_params(request: PriceRequest) -> dict:
-    """Параметры, относящиеся только к конкретной модели.
-
-    Сохраняем лишь то, что реально повлияло на результат: число шагов не
-    имеет смысла в записи о расчёте по Блэку-Шоулзу.
-    """
     if request.model.value == "binomial":
         return {"steps": request.steps}
     if request.model.value == "monte_carlo":
@@ -93,13 +83,10 @@ def _model_params(request: PriceRequest) -> dict:
     return {}
 
 
+# Мало иметь цепочку — по ней должны быть котировки. Порог задаётся
+# настройкой MIN_QUOTED_STRIKES: на бумаге, где котируются четыре страйка,
+# улыбку волатильности строить не по чему.
 async def list_instruments(session: AsyncSession) -> list[InstrumentSchema]:
-    """Бумаги с ликвидными опционами, по алфавиту.
-
-    Мало иметь цепочку — по ней должны быть котировки. Порог задаётся
-    настройкой MIN_QUOTED_STRIKES: на бумаге, где котируются четыре
-    страйка, улыбку волатильности строить не по чему.
-    """
     query = (
         select(Instrument)
         .where(
@@ -123,15 +110,11 @@ async def list_instruments(session: AsyncSession) -> list[InstrumentSchema]:
     ]
 
 
+# Пишется только то, что реально пришло от источника: повторно класть
+# отданное из кэша значит засорять таблицу копиями одной и той же записи.
 async def save_snapshot(
     session: AsyncSession, snapshot: MarketSnapshotSchema
 ) -> None:
-    """Сохранить рыночный снимок.
-
-    Пишется только то, что реально пришло от источника: повторно класть
-    отданное из кэша значит засорять таблицу копиями одной и той же
-    записи.
-    """
     session.add(
         MarketSnapshot(
             ticker=snapshot.ticker,
@@ -152,14 +135,11 @@ async def save_snapshot(
     await session.commit()
 
 
+# Нужен при старте: кэш в памяти после перезапуска пуст, и без этого первый
+# же выбор любой акции снова шёл бы в сеть.
 async def latest_snapshots(
     session: AsyncSession,
 ) -> list[MarketSnapshotSchema]:
-    """По одному последнему снимку на каждую бумагу.
-
-    Нужен при старте: кэш в памяти после перезапуска пуст, и без этого
-    первый же выбор любой акции снова шёл бы в сеть.
-    """
     newest = (
         select(
             MarketSnapshot.ticker,
@@ -199,16 +179,13 @@ async def latest_snapshots(
     ]
 
 
+# По умолчанию дополняет: скринер отдаёт самые ликвидные бумаги дня, и
+# затирать ими весь список значит терять то, что было вчера. Флаг replace
+# нужен, чтобы избавиться от накопившегося и от бумаг, прописанных в первой
+# миграции.
 async def sync_instruments(
     session: AsyncSession, items: list[InstrumentSchema], replace: bool = False
 ) -> dict[str, int]:
-    """Записать список бумаг, вернуть сводку.
-
-    По умолчанию дополняет: скринер отдаёт самые ликвидные бумаги дня, и
-    затирать ими весь список значит терять то, что было вчера. Флаг
-    replace нужен, чтобы избавиться от накопившегося и от бумаг,
-    прописанных в первой миграции.
-    """
     known_before = set(
         (await session.scalars(select(Instrument.ticker))).all()
     )

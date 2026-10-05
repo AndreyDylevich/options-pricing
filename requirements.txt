@@ -29,5 +29,6 @@ alembic>=1.14
 
 # Тесты
 pytest>=8.3
-pytest-asyncio>=0.24
+
+# httpx нужен fastapi.testclient.TestClient: сам он его не объявляет.
 httpx>=0.28

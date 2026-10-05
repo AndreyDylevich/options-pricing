@@ -1,4 +1,7 @@
-"""Кэш рыночных данных поверх yfinance — без обращений в сеть."""
+"""Кэш рыночных данных поверх yfinance: проверяем свежесть, отдачу
+устаревшего при сбое источника и восстановление q из графика выплат.
+Обращений в сеть нет.
+"""
 
 from datetime import datetime, timezone
 
@@ -27,7 +30,7 @@ def clean_cache():
 
 @pytest.fixture
 def source(monkeypatch):
-    """Подменяем поход в сеть счётчиком вызовов."""
+    # Подменяем поход в сеть счётчиком вызовов.
     calls = {"count": 0, "fail": False}
 
     def fake_fetch(instrument):
@@ -65,7 +68,7 @@ def test_refresh_bypasses_cache(source) -> None:
 
 
 def test_stale_value_served_when_source_fails(source) -> None:
-    """Ради этого кэш и заводился: Yahoo лёг, а страница работает."""
+    # Ради этого кэш и заводился: Yahoo лёг, а страница работает.
     first = market_data.get_market_snapshot("KO")
     source["fail"] = True
 
@@ -98,7 +101,7 @@ def test_different_tickers_cached_separately(source) -> None:
 
 
 def test_registry_starts_empty_without_database() -> None:
-    """Пустой справочник — законное состояние до первой синхронизации."""
+    # Пустой справочник — законное состояние до первой синхронизации.
     market_data.set_instruments([])
     assert market_data.list_instruments() == []
     assert market_data.find_instrument("AAPL") is None
@@ -120,7 +123,7 @@ def test_registry_replaced_from_database() -> None:
 
 
 def test_prime_cache_keeps_original_timestamp(source) -> None:
-    """Снимок из базы не должен притворяться свежим."""
+    # Снимок из базы не должен притворяться свежим.
     from datetime import timedelta
 
     old_snapshot = make_snapshot(50.0)
@@ -136,7 +139,7 @@ def test_prime_cache_keeps_original_timestamp(source) -> None:
 
 
 def test_prime_cache_serves_recent_snapshot(source) -> None:
-    """А свежий — переживает перезапуск и экономит поход в сеть."""
+    # А свежий — переживает перезапуск и экономит поход в сеть.
     market_data.prime_cache([make_snapshot(50.0)])
 
     served = market_data.get_market_snapshot("KO")
@@ -146,14 +149,12 @@ def test_prime_cache_serves_recent_snapshot(source) -> None:
 
 
 def test_prime_cache_rebuilds_effective_div_yield(source) -> None:
-    """q по экспирациям восстанавливается из графика выплат, а не из базы.
-
-    В базе хранится только график отсечек: готовое q зависит от
-    сегодняшней даты и назавтра уже неверно. Без этого пересчёта снимок,
-    поднятый из базы, отдавал бы пустую карту, расчёт молча откатывался
-    бы к трейлингу за 12 месяцев, и вся работа по датам отсечек
-    переставала бы действовать до первого ручного обновления.
-    """
+    # q по экспирациям восстанавливается из графика выплат, а не из базы.
+    # В базе хранится только график отсечек: готовое q зависит от
+    # сегодняшней даты и назавтра уже неверно. Без этого пересчёта снимок,
+    # поднятый из базы, отдавал бы пустую карту, расчёт молча откатывался
+    # бы к трейлингу за 12 месяцев, и вся работа по датам отсечек
+    # переставала бы действовать до первого ручного обновления.
     from datetime import date, timedelta
 
     from app.schemas.instruments import DividendPayment
@@ -181,7 +182,7 @@ def test_prime_cache_rebuilds_effective_div_yield(source) -> None:
 
 
 def test_prime_cache_without_schedule_yields_nothing(source) -> None:
-    """Бумага без дивидендов: пустой график даёт нулевое q, а не трейлинг."""
+    # Бумага без дивидендов: пустой график даёт нулевое q, а не трейлинг.
     from datetime import date, timedelta
 
     expiry = str(date.today() + timedelta(days=40))
@@ -200,7 +201,8 @@ def test_prime_cache_without_schedule_yields_nothing(source) -> None:
 
 
 def test_screener_filters_and_marks_options(monkeypatch) -> None:
-    """Оставляем только акции и фонды в долларах, помечаем наличие опционов."""
+    # Оставляем только акции и фонды в долларах, помечаем наличие
+    # опционов.
     quotes = [
         {"symbol": "AAPL", "shortName": "Apple Inc.",
          "fullExchangeName": "NasdaqGS", "quoteType": "EQUITY", "currency": "USD"},

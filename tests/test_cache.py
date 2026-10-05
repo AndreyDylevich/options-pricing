@@ -1,4 +1,6 @@
-"""Кэш рыночных данных: протухание и сохранение устаревших записей."""
+"""Кэш рыночных данных: проверяем протухание по часам, которыми управляет
+тест, и что просроченная запись остаётся доступной для отдачи при сбое.
+"""
 
 from datetime import datetime, timedelta, timezone
 
@@ -8,7 +10,7 @@ from app.services.cache import TTLCache
 
 
 class FakeClock:
-    """Часы, которые двигает тест."""
+    # Часы, которые двигает тест.
 
     def __init__(self) -> None:
         self.now = datetime(2026, 8, 14, 12, 0, tzinfo=timezone.utc)
@@ -51,7 +53,7 @@ def test_value_goes_stale_after_ttl(cache: TTLCache[str], clock: FakeClock) -> N
 
 
 def test_stale_value_is_not_dropped(cache: TTLCache[str], clock: FakeClock) -> None:
-    """Просроченная запись остаётся: она пригодится, если источник упал."""
+    # Просроченная запись остаётся: она пригодится, если источник упал.
     cache.set("AAPL", "снимок")
     clock.advance(days=3)
 

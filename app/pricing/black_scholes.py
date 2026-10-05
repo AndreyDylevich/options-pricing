@@ -1,13 +1,6 @@
-"""Блэк-Шоулз-Мертон: европейский опцион, непрерывная дивидендная доходность q.
-
-    d1 = (ln(S/K) + (r - q + sigma**2 / 2) * T) / (sigma * sqrt(T))
-    d2 = d1 - sigma * sqrt(T)
-
-    call = S * exp(-qT) * N(d1) - K * exp(-rT) * N(d2)
-    put  = K * exp(-rT) * N(-d2) - S * exp(-qT) * N(-d1)
-
-Греки — аналитические формулы, без пересчёта цены. Эта модель служит
-эталоном в тестах для двух остальных.
+"""Блэк-Шоулз-Мертон: считаем цену европейского опциона по формуле и греки
+аналитическими производными, без пересчёта цены. Для европейского стиля это
+точное значение, к которому две остальные модели лишь сходятся.
 """
 
 import time
@@ -32,7 +25,6 @@ DAYS_IN_YEAR = 365.0
 
 
 def calculate(params: OptionParams) -> PricingResult:
-    """Цена и греки одним вызовом."""
     _require_european(params)
 
     started = time.perf_counter()
@@ -50,6 +42,8 @@ def calculate(params: OptionParams) -> PricingResult:
     )
 
 
+# call = S*exp(-qT)*N(d1) - K*exp(-rT)*N(d2)
+# put  = K*exp(-rT)*N(-d2) - S*exp(-qT)*N(-d1)
 def price(params: OptionParams) -> float:
     _require_european(params)
 
@@ -112,6 +106,8 @@ def greeks(params: OptionParams) -> Greeks:
     )
 
 
+# d1 = (ln(S/K) + (r - q + sigma**2 / 2) * T) / (sigma * sqrt(T))
+# d2 = d1 - sigma * sqrt(T)
 def _d1_d2(params: OptionParams) -> tuple[float, float]:
     tau, sigma = params.time_to_expiry, params.sigma
     drift = params.rate - params.div_yield + sigma**2 / 2
@@ -120,13 +116,10 @@ def _d1_d2(params: OptionParams) -> tuple[float, float]:
     return d1, d1 - sigma * sqrt(tau)
 
 
+# Американский стиль молча считать европейским нельзя: цена получилась бы
+# заниженной без единого предупреждения, ведь право досрочного исполнения
+# стоит неотрицательно. Пусть лучше упадёт с внятной ошибкой.
 def _require_european(params: OptionParams) -> None:
-    """Американский стиль молча считать европейским нельзя.
-
-    Цена получилась бы заниженной без единого предупреждения: у
-    американского опциона есть право досрочного исполнения, и стоит оно
-    неотрицательно. Пусть лучше упадёт с внятной ошибкой.
-    """
     if params.exercise is not ExerciseStyle.EUROPEAN:
         raise AmericanNotSupported(
             "Блэк-Шоулз применим только к европейскому стилю. "
@@ -134,21 +127,18 @@ def _require_european(params: OptionParams) -> None:
         )
 
 
+# Случаи, в которых основная формула делит на ноль.
 def _is_degenerate(params: OptionParams) -> bool:
-    """Случаи, в которых формула делит на ноль."""
     return params.time_to_expiry <= 0 or params.sigma <= 0
 
 
 def _degenerate_price(params: OptionParams) -> float:
-    """Цена там, где основная формула неприменима.
-
-    T = 0: опцион истекает прямо сейчас, стоит ровно внутреннюю стоимость.
-    sigma = 0: цена базового актива движется детерминированно к форварду
-    S * exp((r - q) * T), payoff известен заранее и дисконтируется.
-    """
+    # T = 0: опцион истекает прямо сейчас, стоит ровно внутреннюю стоимость.
     if params.time_to_expiry <= 0:
         return params.intrinsic_value
 
+    # sigma = 0: цена актива идёт детерминированно к форварду, выплата
+    # известна заранее и просто дисконтируется.
     tau = params.time_to_expiry
     forward = params.spot * exp((params.rate - params.div_yield) * tau)
 
@@ -160,12 +150,9 @@ def _degenerate_price(params: OptionParams) -> float:
     return exp(-params.rate * tau) * payoff
 
 
+# В вырожденных случаях все производные по волатильности и времени равны
+# нулю или не определены, а delta ступенчатая: единица, если в деньгах.
 def _degenerate_greeks(params: OptionParams) -> Greeks:
-    """Греки в вырожденных случаях.
-
-    Все производные по волатильности и времени равны нулю или не
-    определены; delta ступенчатая — единица, если опцион в деньгах.
-    """
     in_the_money = params.intrinsic_value > 0
     delta = (1.0 if params.is_call else -1.0) if in_the_money else 0.0
 

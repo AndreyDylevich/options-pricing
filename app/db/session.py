@@ -1,4 +1,6 @@
-"""Асинхронный engine и фабрика сессий SQLAlchemy."""
+"""Подключение к PostgreSQL: асинхронный engine и фабрика сессий SQLAlchemy.
+Ничего не считает — отдаёт сессию на время одного HTTP-запроса.
+"""
 
 from collections.abc import AsyncGenerator
 
@@ -14,7 +16,7 @@ engine = create_async_engine(settings.database_url, pool_pre_ping=True)
 SessionFactory = async_sessionmaker(engine, expire_on_commit=False)
 
 
+# Зависимость FastAPI: сессия живёт ровно один запрос.
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
-    """Зависимость FastAPI: сессия на время одного запроса."""
     async with SessionFactory() as session:
         yield session

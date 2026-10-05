@@ -1,4 +1,6 @@
-"""Численные греки: поведение на границах допустимых диапазонов."""
+"""Численные греки: проверяем совпадение с аналитическими и поведение на
+границах допустимых диапазонов, где сдвиг пришлось бы прижимать.
+"""
 
 from dataclasses import replace
 
@@ -16,12 +18,9 @@ from app.pricing.models import MAX_RATE, MAX_SIGMA, MIN_RATE, OptionParams
 def test_bump_at_boundary_does_not_raise(
     atm_call: OptionParams, field: str, value: float
 ) -> None:
-    """Параметр ровно на границе диапазона.
-
-    Сдвиг для численной производной вышел бы за границу, и валидация
-    OptionParams роняла бы расчёт — при том что схема такие значения
-    разрешает. Сдвиг обязан зажиматься.
-    """
+    # Параметр ровно на границе диапазона. Сдвиг для численной производной
+    # вышел бы за границу, и валидация OptionParams роняла бы расчёт — при
+    # том что схема такие значения разрешает. Сдвиг обязан зажиматься.
     edge = replace(atm_call, **{field: value})
     greeks = numeric_greeks.numeric_greeks(bs.price, edge)
 
@@ -30,7 +29,7 @@ def test_bump_at_boundary_does_not_raise(
 
 
 def test_clamped_bump_still_close_to_analytic(atm_call: OptionParams) -> None:
-    """У границы разность односторонняя, но всё ещё осмысленная."""
+    # У границы разность односторонняя, но всё ещё осмысленная.
     edge = replace(atm_call, rate=MIN_RATE)
     numeric = numeric_greeks.rho(bs.price, edge)
     analytic = bs.greeks(edge).rho
@@ -40,12 +39,12 @@ def test_clamped_bump_still_close_to_analytic(atm_call: OptionParams) -> None:
 def test_theta_near_expiry_does_not_go_negative_in_time(
     atm_call: OptionParams,
 ) -> None:
-    """Шаг по времени ограничен половиной оставшегося срока."""
+    # Шаг по времени ограничен половиной оставшегося срока.
     almost_expired = replace(atm_call, time_to_expiry=1 / 365 / 24)
     assert numeric_greeks.theta(bs.price, almost_expired) < 0
 
 
 def test_zero_span_returns_zero(atm_call: OptionParams) -> None:
-    """Если сдвинуть параметр некуда, производная считается нулевой."""
+    # Если сдвинуть параметр некуда, производная считается нулевой.
     expired = replace(atm_call, time_to_expiry=0.0)
     assert numeric_greeks.theta(bs.price, expired) == 0.0
