@@ -42,12 +42,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 async def lifespan(_: FastAPI):
     try:
         async with SessionFactory() as session:
-            instruments = await repository.list_instruments(session)
-
-            if not instruments:
-                instruments = await _first_sync(session)
-
-            market_data.set_instruments(instruments)
+            market_data.set_instruments(await repository.list_instruments(session))
             market_data.prime_cache(await repository.latest_snapshots(session))
     except Exception:
         # База или источник недоступны. Список бумаг останется пустым, на
@@ -55,16 +50,28 @@ async def lifespan(_: FastAPI):
         # расчёты от базы не зависят и продолжат работать.
         logger.exception("Не удалось поднять состояние из базы")
 
-    cleaner = asyncio.create_task(_purge_calculations_forever())
+    tasks = [asyncio.create_task(_purge_calculations_forever())]
+
+    # Наполнение пустого справочника — фоновой задачей, а не здесь.
+    # Раньше его дожидались до yield, и это оказалось ловушкой: Yahoo
+    # неофициальный источник и временами таймаутит, а пока он таймаутит,
+    # uvicorn не начинает принимать запросы вовсе. Проверено на чистом
+    # запуске: ни страница, ни /api/health не отвечали минутами, в журнале
+    # шли только предупреждения про cookie. Теперь страница открывается
+    # сразу, а список бумаг появляется, когда скринер ответит.
+    if not market_data.list_instruments():
+        tasks.append(asyncio.create_task(_bootstrap_instruments()))
 
     yield
 
     # Отменяем явно и дожидаемся: без этого задача умирает вместе с
     # событийным циклом посреди запроса к базе, и asyncio ругается на
     # незавершённое ожидание при каждой остановке сервера.
-    cleaner.cancel()
-    with suppress(asyncio.CancelledError):
-        await cleaner
+    for task in tasks:
+        task.cancel()
+    for task in tasks:
+        with suppress(asyncio.CancelledError):
+            await task
 
     await engine.dispose()
 
@@ -97,15 +104,27 @@ async def _purge_calculations_forever() -> None:
 
 
 # Ни одного тикера в коде не зашито, поэтому на чистой базе список пустой.
-# Тянем его при первом старте, иначе пользователь увидел бы пустой
+# Тянем его в фоне при первом старте, иначе пользователь увидел бы пустой
 # выпадающий список и не понял, что делать.
-async def _first_sync(session) -> list:
+#
+# Ошибку только пишем в журнал: Yahoo источник неофициальный, и его отказ не
+# повод мешать работе. Страница в этом случае предложит нажать
+# «Синхронизировать» вручную.
+async def _bootstrap_instruments() -> None:
     logger.info("Справочник бумаг пуст, тянем список из скринера")
 
-    items = await run_in_threadpool(market_data.fetch_screener_instruments)
-    await repository.sync_instruments(session, items)
+    try:
+        items = await run_in_threadpool(market_data.fetch_screener_instruments)
 
-    return await repository.list_instruments(session)
+        async with SessionFactory() as session:
+            await repository.sync_instruments(session, items)
+            market_data.set_instruments(await repository.list_instruments(session))
+
+        logger.info("Справочник наполнен: %d бумаг", len(market_data.list_instruments()))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("Не удалось наполнить справочник из скринера")
 
 
 app = FastAPI(title="Option Pricing", version="0.1.0", lifespan=lifespan)
