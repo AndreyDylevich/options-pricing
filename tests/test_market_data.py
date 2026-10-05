@@ -3,7 +3,7 @@
 Обращений в сеть нет.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -12,7 +12,7 @@ from app.services import market_data
 
 
 def make_snapshot(spot: float) -> MarketSnapshot:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return MarketSnapshot(
         ticker="KO", name="Coca-Cola", currency="USD", spot=spot,
         sigma_30d=0.26, sigma_90d=0.22, sigma_252d=0.18,
@@ -127,7 +127,7 @@ def test_prime_cache_keeps_original_timestamp(source) -> None:
     from datetime import timedelta
 
     old_snapshot = make_snapshot(50.0)
-    stale_time = datetime.now(timezone.utc) - timedelta(hours=5)
+    stale_time = datetime.now(UTC) - timedelta(hours=5)
     aged = old_snapshot.model_copy(update={"fetched_at": stale_time})
 
     market_data.prime_cache([aged])

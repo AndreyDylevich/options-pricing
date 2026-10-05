@@ -2,7 +2,7 @@
 тест, и что просроченная запись остаётся доступной для отдачи при сбое.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -13,7 +13,7 @@ class FakeClock:
     # Часы, которые двигает тест.
 
     def __init__(self) -> None:
-        self.now = datetime(2026, 8, 14, 12, 0, tzinfo=timezone.utc)
+        self.now = datetime(2026, 8, 14, 12, 0, tzinfo=UTC)
 
     def __call__(self) -> datetime:
         return self.now

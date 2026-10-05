@@ -77,7 +77,7 @@ def price(params: OptionParams, steps: int = DEFAULT_STEPS) -> float:
 # Цена в корне и греки, снятые с узлов. delta, gamma и theta равны None,
 # если шагов меньше двух: узлов для разностей просто нет.
 class _TreeResult:
-    __slots__ = ("price", "delta", "gamma", "theta")
+    __slots__ = ("delta", "gamma", "price", "theta")
 
     def __init__(
         self,

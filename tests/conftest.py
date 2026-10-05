@@ -49,8 +49,8 @@ async def _prepare_test_database(url: str) -> None:
     from sqlalchemy.engine import make_url
     from sqlalchemy.ext.asyncio import create_async_engine
 
-    from app.db.base import Base
     from app.db import entities  # noqa: F401  регистрирует таблицы в metadata
+    from app.db.base import Base
 
     target = make_url(url)
 

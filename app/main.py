@@ -144,7 +144,7 @@ async def validation_handler(_: Request, error: RequestValidationError) -> JSONR
     messages = []
     for item in error.errors():
         location = [part for part in item["loc"] if part != "body"]
-        name = field_names.get(str(location[-1]) if location else "", None)
+        name = field_names.get(str(location[-1]) if location else "")
         text = item["msg"].removeprefix("Value error, ")
         messages.append(f"{name}: {text}" if name else text)
 

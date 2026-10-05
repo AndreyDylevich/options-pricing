@@ -30,8 +30,8 @@ config.set_main_option("sqlalchemy.url", settings.database_url)
 # Импорт entities обязателен: autogenerate сравнивает Base.metadata с
 # реальной схемой, а таблицы попадают в metadata только при импорте
 # модуля, который их объявляет.
-from app.db.base import Base  # noqa: E402
 from app.db import entities  # noqa: E402, F401
+from app.db.base import Base  # noqa: E402
 
 target_metadata = Base.metadata
 

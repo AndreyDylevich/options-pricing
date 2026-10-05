@@ -5,7 +5,8 @@
 
 import math
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
+from itertools import pairwise
 
 import numpy as np
 import pandas as pd
@@ -164,7 +165,7 @@ def fetch_screener_instruments(
         item.model_copy(
             update={"has_options": has_options, "quoted_strikes": quoted}
         )
-        for item, (has_options, quoted) in zip(candidates, measured)
+        for item, (has_options, quoted) in zip(candidates, measured, strict=True)
     ]
 
 
@@ -246,7 +247,7 @@ def _fetch_snapshot(instrument: Instrument) -> MarketSnapshot:
         risk_free_rate=rate,
         expirations=expirations,
         as_of=history.index[-1].to_pydatetime(),
-        fetched_at=datetime.now(timezone.utc),
+        fetched_at=datetime.now(UTC),
     )
 
 
@@ -446,7 +447,7 @@ def _payment_period(ex_dates: list[date]) -> int:
         return DEFAULT_PAYMENT_PERIOD_DAYS
 
     gaps = sorted(
-        (later - earlier).days for earlier, later in zip(ex_dates, ex_dates[1:])
+        (later - earlier).days for earlier, later in pairwise(ex_dates)
     )
     median = gaps[len(gaps) // 2]
 
@@ -568,7 +569,7 @@ def _expirations(yf_ticker: yf.Ticker) -> list[str]:
     except Exception:
         return []
 
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     return [value for value in raw if date.fromisoformat(value) > today]
 
 

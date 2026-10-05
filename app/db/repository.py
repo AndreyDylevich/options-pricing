@@ -2,7 +2,7 @@
 список бумаг. Ничего не считает — только читает и пишет.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
@@ -63,7 +63,7 @@ async def purge_old_calculations(
     days = (
         settings.calculation_retention_days if retention_days is None else retention_days
     )
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    cutoff = datetime.now(UTC) - timedelta(days=days)
 
     result = await session.execute(
         delete(Calculation).where(Calculation.created_at < cutoff)
@@ -196,7 +196,7 @@ async def sync_instruments(
             delete(Instrument).where(Instrument.ticker.notin_(keep))
         )
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     statement = insert(Instrument).values(
         [
             {

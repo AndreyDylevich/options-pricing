@@ -6,7 +6,8 @@ from dataclasses import replace
 
 import pytest
 
-from app.pricing import binomial, black_scholes as bs, bounds, implied_vol
+from app.pricing import binomial, bounds, implied_vol
+from app.pricing import black_scholes as bs
 from app.pricing.models import OptionParams, OptionType
 
 

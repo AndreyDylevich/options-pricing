@@ -2,7 +2,7 @@
 ввод не доходит до моделей и что расчёт попадает в базу.
 """
 
-from datetime import date, timedelta
+from datetime import UTC, date, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -243,13 +243,13 @@ def test_chain_unknown_ticker_is_404(client: TestClient) -> None:
 
 def test_chain_returns_solved_volatility(client: TestClient, monkeypatch) -> None:
     # Цепочка отдаётся с посчитанной волатильностью по каждому страйку.
-    from datetime import date, datetime, timedelta, timezone
+    from datetime import date, datetime, timedelta
 
     from app.schemas.instruments import MarketSnapshot
     from app.services import market_data
 
     expiry = str(date.today() + timedelta(days=30))
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     snapshot = MarketSnapshot(
         ticker="KO", name="Coca-Cola", currency="USD", spot=100.0,
@@ -263,7 +263,6 @@ def test_chain_returns_solved_volatility(client: TestClient, monkeypatch) -> Non
 
     # Цены посчитаны Блэком-Шоулзом при sigma = 30%: решатель обязан
     # вернуть ровно её.
-    from dataclasses import replace
 
     from app.pricing import black_scholes
     from app.pricing.models import OptionParams, OptionType
@@ -304,7 +303,7 @@ def _parity_fixture(
     # Цепочка, построенная при одном q, и снимок, уверенный в другом.
     # Ровно та ситуация, ради которой сверка и написана: формулы считают
     # верно, а подставленная в них дивидендная доходность неверна.
-    from datetime import date, datetime, timedelta, timezone
+    from datetime import date, datetime, timedelta
 
     from app.pricing import black_scholes
     from app.pricing.models import OptionParams, OptionType
@@ -312,7 +311,7 @@ def _parity_fixture(
     from app.services import market_data
 
     expiry = str(date.today() + timedelta(days=30))
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     tau = 30 / 365
 
     snapshot = MarketSnapshot(
@@ -416,7 +415,7 @@ def test_purge_removes_only_stale_rows(client: TestClient, database) -> None:
     # Старое удаляется, свежее остаётся. История наружу не отдаётся,
     # поэтому и проверяется прямо в базе. Кладём две записи по разные
     # стороны срока хранения и смотрим, какая переживёт чистку.
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from sqlalchemy import select
 
@@ -425,7 +424,7 @@ def test_purge_removes_only_stale_rows(client: TestClient, database) -> None:
     from app.db.entities import Calculation
 
     retention = settings.calculation_retention_days
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     def sample(created_at: datetime) -> Calculation:
         return Calculation(
@@ -465,14 +464,14 @@ def test_purge_honours_an_explicit_retention(
     client: TestClient, database
 ) -> None:
     # Срок хранения можно задать явно — на нём и держатся тесты.
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from sqlalchemy import select
 
     from app.db import repository
     from app.db.entities import Calculation
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     async def insert_one(session):
         row = Calculation(
@@ -520,13 +519,13 @@ def _quote_fixture(monkeypatch, strikes=(335.0, 340.0, 345.0)):
     # Снимок и цепочка с заданной сеткой страйков. Спред делаем разным по
     # страйкам: по нему в тестах видно, что возвращается именно
     # запрошенный контракт, а не первый подошедший.
-    from datetime import date, datetime, timedelta, timezone
+    from datetime import date, datetime, timedelta
 
     from app.schemas.instruments import MarketSnapshot
     from app.services import market_data
 
     expiry = str(date.today() + timedelta(days=30))
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     snapshot = MarketSnapshot(
         ticker="KO", name="Coca-Cola", currency="USD", spot=341.07,
@@ -672,7 +671,7 @@ def test_volatility_table_lists_every_method(client: TestClient, monkeypatch) ->
     # В таблице историческая, GARCH, EGARCH и подразумеваемая. Сеть
     # подменяется целиком: тест про сборку таблицы, а не про то, что
     # сегодня на рынке.
-    from datetime import date, datetime, timedelta, timezone
+    from datetime import date, datetime, timedelta
 
     import numpy as np
 
@@ -682,7 +681,7 @@ def test_volatility_table_lists_every_method(client: TestClient, monkeypatch) ->
     from app.services import market_data
 
     expiry = str(date.today() + timedelta(days=30))
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     snapshot = MarketSnapshot(
         ticker="KO", name="Coca-Cola", currency="USD", spot=100.0,
@@ -743,7 +742,7 @@ def test_volatility_survives_a_short_series(client: TestClient, monkeypatch) -> 
     # Истории мало для GARCH — таблица всё равно приходит, но с оговоркой.
     # Историческая по короткому окну считается и на сотне дней, и терять
     # её из-за того, что не подогналась модель, незачем.
-    from datetime import date, datetime, timedelta, timezone
+    from datetime import date, datetime, timedelta
 
     import numpy as np
 
@@ -751,7 +750,7 @@ def test_volatility_survives_a_short_series(client: TestClient, monkeypatch) -> 
     from app.services import market_data
 
     expiry = str(date.today() + timedelta(days=30))
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     snapshot = MarketSnapshot(
         ticker="KO", name="Coca-Cola", currency="USD", spot=100.0,
@@ -779,12 +778,12 @@ def test_volatility_survives_a_short_series(client: TestClient, monkeypatch) -> 
 
 
 def test_volatility_rejects_unknown_expiry(client: TestClient, monkeypatch) -> None:
-    from datetime import date, datetime, timedelta, timezone
+    from datetime import date, datetime, timedelta
 
     from app.schemas.instruments import MarketSnapshot
     from app.services import market_data
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     snapshot = MarketSnapshot(
         ticker="KO", name="Coca-Cola", currency="USD", spot=100.0,
         sigma_30d=0.25, sigma_90d=0.25, sigma_252d=0.25,

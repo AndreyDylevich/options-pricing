@@ -3,6 +3,7 @@
 """
 
 from datetime import date, timedelta
+from itertools import pairwise
 
 import pytest
 
@@ -51,7 +52,7 @@ class TestDeltaVsSpot:
         # Дороже актив — дороже колл, значит дельта только растёт.
         values = profiles.delta_vs_spot.y
 
-        assert all(b >= a for a, b in zip(values, values[1:]))
+        assert all(b >= a for a, b in pairwise(values))
 
     def test_put_delta_is_negative(self) -> None:
         # У пута дельта от минус единицы до нуля — знак перевёрнут.
@@ -101,7 +102,9 @@ class TestGammaVsSpot:
         # активу величину, а вторая производная линейного равна нулю.
         put = pricing_service.greek_profiles(request_for(option_type="put"))
 
-        for ours, theirs in zip(profiles.gamma_vs_spot.y, put.gamma_vs_spot.y):
+        for ours, theirs in zip(
+            profiles.gamma_vs_spot.y, put.gamma_vs_spot.y, strict=True
+        ):
             assert ours == pytest.approx(theirs, abs=1e-9)
 
 

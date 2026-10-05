@@ -1,0 +1,60 @@
+# Проверки после каждой отправки: линтер и тесты на чистой машине.
+#
+# Главная польза не в том, что тесты прогоняются ещё раз — ты и сам их
+# запускаешь. Польза в словах «чистая машина»: зависимости ставятся с нуля
+# по requirements.txt, и неполный список ломает прогон здесь, а не у того,
+# кто склонировал проект.
+
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    services:
+      # PostgreSQL поднимается рядом, чтобы прошли и те пять тестов, что
+      # смотрят в таблицы напрямую. Без него они пропустились бы — так и
+      # задумано, но проверить путь через базу тоже надо.
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pricing
+        ports:
+          - 5432:5432
+        # Без проверки готовности шаги начались бы раньше, чем сервер
+        # примется отвечать: запуск контейнера и готовность базы — разные
+        # события.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Поставить зависимости
+        run: |
+          pip install -r requirements.txt
+          pip install ruff
+
+      - name: Линтер
+        run: ruff check .
+
+      - name: Тесты
+        env:
+          # Тесты сами заведут себе базу pricing_test рядом с этой.
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/pricing
+        run: pytest -q

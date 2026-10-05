@@ -10,16 +10,16 @@ Revises: ba84f1e7aa7e
 Create Date: 2026-09-14 19:55:19.349350
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "7befb4bac7d8"
-down_revision: Union[str, Sequence[str], None] = "ba84f1e7aa7e"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "ba84f1e7aa7e"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

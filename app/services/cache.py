@@ -6,18 +6,15 @@
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Generic, TypeVar
-
-T = TypeVar("T")
+from datetime import UTC, datetime, timedelta
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 @dataclass(frozen=True, slots=True)
-class Entry(Generic[T]):
+class Entry[T]:
     value: T
     stored_at: datetime
     is_fresh: bool
@@ -27,7 +24,7 @@ class Entry(Generic[T]):
         return _utc_now() - self.stored_at
 
 
-class TTLCache(Generic[T]):
+class TTLCache[T]:
     # Часами управляет вызывающий: иначе протухание нельзя было бы
     # проверить тестами, не выходя в сеть и не ожидая реального времени.
     def __init__(
