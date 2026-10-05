@@ -526,3 +526,298 @@ def test_purge_honours_an_explicit_retention(
 
     in_own_loop(drop, database)
     assert in_own_loop(exists, database) is None
+
+
+# --- рыночная цена контракта ---
+
+
+def _quote_fixture(monkeypatch, strikes=(335.0, 340.0, 345.0)):
+    """Снимок и цепочка с заданной сеткой страйков.
+
+    Спред делаем разным по страйкам: по нему в тестах видно, что
+    возвращается именно запрошенный контракт, а не первый подошедший.
+    """
+    from datetime import date, datetime, timedelta, timezone
+
+    from app.schemas.instruments import MarketSnapshot
+    from app.services import market_data
+
+    expiry = str(date.today() + timedelta(days=30))
+    now = datetime.now(timezone.utc)
+
+    snapshot = MarketSnapshot(
+        ticker="KO", name="Coca-Cola", currency="USD", spot=341.07,
+        sigma_30d=0.2, sigma_90d=0.2, sigma_252d=0.2,
+        div_yield=0.0, risk_free_rate=0.04,
+        expirations=[expiry], as_of=now, fetched_at=now,
+    )
+    monkeypatch.setattr(
+        market_data, "get_market_snapshot", lambda ticker, refresh=False: snapshot
+    )
+
+    def fake_chain(ticker, expiry_date):
+        rows = []
+        for index, strike in enumerate(strikes):
+            for side in ("call", "put"):
+                rows.append((side, {
+                    "strike": strike,
+                    "bid": 5.0 + index,
+                    "ask": 6.0 + index,
+                    "volume": 10 + index,
+                    "openInterest": 100 + index,
+                }))
+        return rows, len(rows)
+
+    monkeypatch.setattr(market_data, "get_option_chain", fake_chain)
+    return expiry
+
+
+def test_quote_returns_the_requested_contract(client: TestClient, monkeypatch) -> None:
+    """Отдаётся именно запрошенный страйк и сторона, а не первый попавшийся."""
+    expiry = _quote_fixture(monkeypatch)
+
+    body = client.get(
+        f"/api/instruments/KO/quote?expiry={expiry}&strike=340&option_type=call"
+    ).json()
+
+    assert body["strike"] == 340.0
+    assert body["option_type"] == "call"
+    # Второй страйк в сетке, значит bid 6.0 / ask 7.0 — проверяем, что не
+    # вернулся первый.
+    assert body["bid"] == 6.0
+    assert body["ask"] == 7.0
+    assert body["mid"] == pytest.approx(6.5)
+    assert body["spread"] == pytest.approx(1.0)
+    assert body["volume"] == 11
+    assert body["open_interest"] == 101
+
+
+def test_quote_names_nearest_strikes_when_not_listed(
+    client: TestClient, monkeypatch
+) -> None:
+    """Страйк в форме можно вписать любой, а биржа торгует сетку.
+
+    Ответ должен не просто отказать, а подсказать, куда двигаться:
+    иначе пользователь решит, что сломалось, а не что контракта нет.
+    """
+    expiry = _quote_fixture(monkeypatch)
+
+    response = client.get(
+        f"/api/instruments/KO/quote?expiry={expiry}&strike=341.07&option_type=call"
+    )
+
+    assert response.status_code == 404
+    detail = response.json()["detail"]
+    assert "341.07" in detail
+    assert "335, 340, 345" in detail
+
+
+def test_quote_separates_calls_and_puts(client: TestClient, monkeypatch) -> None:
+    """Колл и пут на одном страйке — разные контракты с разными ценами."""
+    expiry = _quote_fixture(monkeypatch, strikes=(340.0,))
+
+    call = client.get(
+        f"/api/instruments/KO/quote?expiry={expiry}&strike=340&option_type=call"
+    ).json()
+    put = client.get(
+        f"/api/instruments/KO/quote?expiry={expiry}&strike=340&option_type=put"
+    ).json()
+
+    assert call["option_type"] == "call"
+    assert put["option_type"] == "put"
+
+
+def test_quote_rejects_unknown_expiry(client: TestClient, monkeypatch) -> None:
+    _quote_fixture(monkeypatch)
+
+    response = client.get(
+        "/api/instruments/KO/quote?expiry=2030-01-18&strike=340&option_type=call"
+    )
+
+    assert response.status_code == 404
+
+
+def test_quote_rejects_nonpositive_strike(client: TestClient, monkeypatch) -> None:
+    expiry = _quote_fixture(monkeypatch)
+
+    response = client.get(
+        f"/api/instruments/KO/quote?expiry={expiry}&strike=0&option_type=call"
+    )
+
+    assert response.status_code == 422
+
+
+def test_quote_explains_an_empty_chain(client: TestClient, monkeypatch) -> None:
+    """Цепочка без живых котировок — тоже внятное сообщение, а не пустота."""
+    expiry = _quote_fixture(monkeypatch, strikes=())
+
+    response = client.get(
+        f"/api/instruments/KO/quote?expiry={expiry}&strike=340&option_type=call"
+    )
+
+    assert response.status_code == 404
+    assert "живыми котировками" in response.json()["detail"]
+
+
+def test_profiles_endpoint_returns_three_curves(client: TestClient) -> None:
+    """Три кривые, у каждой точка «ты здесь»."""
+    body = request_body()
+    report = client.post("/api/price/profiles", json=body).json()
+
+    assert report["model"] == "black_scholes"
+    for name in ("delta_vs_spot", "gamma_vs_spot", "theta_vs_days"):
+        curve = report[name]
+        assert len(curve["x"]) == len(curve["y"]) > 2
+        assert "current_x" in curve and "current_y" in curve
+
+
+def test_profiles_reject_unknown_ticker(client: TestClient) -> None:
+    assert client.post(
+        "/api/price/profiles", json=request_body(ticker="ZZZZ")
+    ).status_code == 404
+
+
+def test_profiles_reject_bad_input(client: TestClient) -> None:
+    assert client.post(
+        "/api/price/profiles", json=request_body(sigma=50)
+    ).status_code == 422
+
+
+# --- выбор волатильности ---
+
+
+def test_volatility_table_lists_every_method(client: TestClient, monkeypatch) -> None:
+    """В таблице историческая, GARCH, EGARCH и подразумеваемая.
+
+    Сеть подменяется целиком: тест про сборку таблицы, а не про то, что
+    сегодня на рынке.
+    """
+    from datetime import date, datetime, timedelta, timezone
+
+    import numpy as np
+
+    from app.pricing import black_scholes
+    from app.pricing.models import OptionParams, OptionType
+    from app.schemas.instruments import MarketSnapshot
+    from app.services import market_data
+
+    expiry = str(date.today() + timedelta(days=30))
+    now = datetime.now(timezone.utc)
+
+    snapshot = MarketSnapshot(
+        ticker="KO", name="Coca-Cola", currency="USD", spot=100.0,
+        sigma_30d=0.25, sigma_90d=0.25, sigma_252d=0.25,
+        div_yield=0.0, risk_free_rate=0.05,
+        expirations=[expiry], as_of=now, fetched_at=now,
+    )
+    monkeypatch.setattr(
+        market_data, "get_market_snapshot", lambda ticker, refresh=False: snapshot
+    )
+
+    rng = np.random.default_rng(777)
+    monkeypatch.setattr(
+        market_data, "get_log_returns",
+        lambda ticker, period=None: rng.normal(0.0, 0.015, 1300),
+    )
+
+    def fake_chain(ticker, expiry_date):
+        rows = []
+        for strike in (95.0, 100.0, 105.0):
+            for side, kind in (("call", OptionType.CALL), ("put", OptionType.PUT)):
+                params = OptionParams(
+                    spot=100.0, strike=strike, time_to_expiry=30 / 365,
+                    rate=0.05, div_yield=0.0, sigma=0.28, option_type=kind,
+                )
+                price = black_scholes.price(params)
+                rows.append((side, {
+                    "strike": strike, "bid": price - 0.01, "ask": price + 0.01,
+                    "volume": 10, "openInterest": 100, "impliedVolatility": 0.0,
+                }))
+        return rows, len(rows)
+
+    monkeypatch.setattr(market_data, "get_option_chain", fake_chain)
+
+    body = client.get(f"/api/instruments/KO/volatility?expiry={expiry}").json()
+
+    keys = [option["key"] for option in body["options"]]
+    # Историческая одна, годовая: короткие окна на этих же данных шумят
+    # сильнее, чем меняется сама волатильность, а направление её движения
+    # уже видно в переходе GARCH от «завтра» к «за срок».
+    #
+    # Подразумеваемой в этой таблице нет намеренно: подставив её в модель,
+    # получаешь рыночную цену обратно — она из неё и выведена. Её место в
+    # цепочке опционов, рядом с улыбкой.
+    assert keys == ["hist252", "garch", "egarch"]
+    assert body["days_to_expiry"] == 30
+    assert body["observations"] == 1300
+    assert body["warning"] is None
+
+    # Обе модели отчитались параметрами и качеством подгонки.
+    assert {fit["name"] for fit in body["fits"]} == {"GARCH(1,1)", "EGARCH(1,1)"}
+    for fit in body["fits"]:
+        assert fit["aic"] != 0
+        assert fit["params"]
+
+
+def test_volatility_survives_a_short_series(client: TestClient, monkeypatch) -> None:
+    """Истории мало для GARCH — таблица всё равно приходит, но с оговоркой.
+
+    Историческая по короткому окну считается и на сотне дней, и терять её
+    из-за того, что не подогналась модель, незачем.
+    """
+    from datetime import date, datetime, timedelta, timezone
+
+    import numpy as np
+
+    from app.schemas.instruments import MarketSnapshot
+    from app.services import market_data
+
+    expiry = str(date.today() + timedelta(days=30))
+    now = datetime.now(timezone.utc)
+
+    snapshot = MarketSnapshot(
+        ticker="KO", name="Coca-Cola", currency="USD", spot=100.0,
+        sigma_30d=0.25, sigma_90d=None, sigma_252d=None,
+        div_yield=0.0, risk_free_rate=0.05,
+        expirations=[expiry], as_of=now, fetched_at=now,
+    )
+    monkeypatch.setattr(
+        market_data, "get_market_snapshot", lambda ticker, refresh=False: snapshot
+    )
+    rng = np.random.default_rng(1)
+    monkeypatch.setattr(
+        market_data, "get_log_returns",
+        lambda ticker, period=None: rng.normal(0.0, 0.01, 120),
+    )
+    monkeypatch.setattr(market_data, "get_option_chain", lambda t, e: ([], 0))
+
+    body = client.get(f"/api/instruments/KO/volatility?expiry={expiry}").json()
+
+    # Истории на годовое окно не хватило, моделям тоже — таблица пуста,
+    # но приходит с объяснением вместо ошибки.
+    assert [o["key"] for o in body["options"]] == []
+    assert body["fits"] == []
+    assert "250 наблюдений" in body["warning"]
+
+
+def test_volatility_rejects_unknown_expiry(client: TestClient, monkeypatch) -> None:
+    from datetime import date, datetime, timedelta, timezone
+
+    from app.schemas.instruments import MarketSnapshot
+    from app.services import market_data
+
+    now = datetime.now(timezone.utc)
+    snapshot = MarketSnapshot(
+        ticker="KO", name="Coca-Cola", currency="USD", spot=100.0,
+        sigma_30d=0.25, sigma_90d=0.25, sigma_252d=0.25,
+        div_yield=0.0, risk_free_rate=0.05,
+        expirations=[str(date.today() + timedelta(days=30))],
+        as_of=now, fetched_at=now,
+    )
+    monkeypatch.setattr(
+        market_data, "get_market_snapshot", lambda ticker, refresh=False: snapshot
+    )
+
+    assert client.get(
+        "/api/instruments/KO/volatility?expiry=2030-01-18"
+    ).status_code == 404

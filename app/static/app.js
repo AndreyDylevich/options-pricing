@@ -10,15 +10,14 @@ const paramsForm = document.getElementById("params");
 const paramsStatus = document.getElementById("params-status");
 const calcCard = document.getElementById("calc-card");
 const calcStatus = document.getElementById("calc-status");
+const volCard = document.getElementById("vol-card");
+const volNote = document.getElementById("vol-note");
 const resultCard = document.getElementById("result-card");
-const compareCard = document.getElementById("compare-card");
 const compareNote = document.getElementById("compare-note");
-const chainCard = document.getElementById("chain-card");
 const chainNote = document.getElementById("chain-note");
-const convergenceCard = document.getElementById("convergence-card");
 const convergenceNote = document.getElementById("convergence-note");
-const parityCard = document.getElementById("parity-card");
 const parityNote = document.getElementById("parity-note");
+const profilesNote = document.getElementById("profiles-note");
 const paritySummary = document.getElementById("parity-summary");
 
 const MODEL_NAMES = {
@@ -192,18 +191,29 @@ function fillParams(data) {
   applyDividendYield();
 
   paramsCard.hidden = false;
+  volCard.hidden = false;
+  document.querySelector("#vol-table tbody").innerHTML = "";
+  document.getElementById("vol-fits").hidden = true;
+  setStatus(volNote,
+    "Нажмите «Подобрать модели», чтобы сравнить способы оценки "
+    + "волатильности и выбрать один");
   calcCard.hidden = false;
 
-  // Карточку показываем сразу — иначе кнопка «Загрузить цепочку», которая
-  // внутри неё, была бы недоступна. Данные подтягиваются по нажатию:
-  // цепочка это отдельный запрос в сеть на пару секунд.
-  chainCard.hidden = false;
-  parityCard.hidden = false;
+  // Панель закладок показываем сразу — иначе кнопки внутри них, вроде
+  // «Загрузить цепочку», были бы недоступны. Данные подтягиваются по
+  // нажатию: каждая закладка это отдельный запрос в сеть.
+  document.getElementById("tabs-card").hidden = false;
+  showTab(activeTab);
+  for (const id of ["profile-delta", "profile-gamma", "profile-theta"]) {
+    document.getElementById(id).hidden = true;
+  }
+  setStatus(profilesNote,
+    "Нажмите «Построить профили», чтобы увидеть поведение греков "
+    + "вокруг заданной точки");
   paritySummary.hidden = true;
   setStatus(parityNote,
     "Нажмите «Сверить», чтобы проверить наши спот, ставку и дивиденды "
     + "по рыночным ценам опционов");
-  convergenceCard.hidden = false;
   document.getElementById("conv-tree").hidden = true;
   document.getElementById("conv-mc").hidden = true;
   setStatus(convergenceNote,
@@ -444,6 +454,121 @@ function syncModelsWithExercise() {
 }
 
 
+// --- выбор волатильности --------------------------------------------
+
+/** Таблица способов оценить волатильность плюс выбор одного из них.
+ *
+ * Запрос к GET /api/instruments/{ticker}/volatility. Подгонку GARCH и
+ * EGARCH делает Python — библиотека `arch`, модуль
+ * `app/pricing/volatility.py`; здесь только таблица и подстановка в форму.
+ */
+async function loadVolatility() {
+  const ticker = select.value;
+  const expiry = document.getElementById("p-expiry").value;
+
+  if (!ticker || !expiry) {
+    return;
+  }
+
+  const button = document.getElementById("load-vol");
+  button.disabled = true;
+  setStatus(volNote, "Тянем пять лет истории и подгоняем модели…");
+
+  try {
+    const report = await getJSON(
+      `/api/instruments/${ticker}/volatility?expiry=${expiry}`
+    );
+    renderVolatilityOptions(report);
+    renderVolatilityFits(report);
+    setStatus(volNote, volatilityNote(report), Boolean(report.warning));
+  } catch (error) {
+    document.querySelector("#vol-table tbody").innerHTML = "";
+    setStatus(volNote, error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+
+function renderVolatilityOptions(report) {
+  const body = document.querySelector("#vol-table tbody");
+  body.innerHTML = "";
+
+  for (const option of report.options) {
+    const row = document.createElement("tr");
+
+    appendCell(row, option.label);
+    appendCell(row, `${(option.sigma * 100).toFixed(2)}%`, "num");
+    appendCell(row, option.note);
+
+    const action = document.createElement("td");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "link";
+    button.textContent = "выбрать";
+    // Подставляем в поле формы и пересчитываем подсказки: дальше расчёт
+    // идёт обычным путём, как если бы значение вписали руками.
+    button.addEventListener("click", () => {
+      setValue("p-sigma", round(option.sigma * 100, 2));
+      refreshHints();
+      setStatus(volNote, `Подставлено: ${option.label} — `
+        + `${(option.sigma * 100).toFixed(2)}%`);
+    });
+    action.append(button);
+    row.append(action);
+
+    body.append(row);
+  }
+}
+
+
+function renderVolatilityFits(report) {
+  const details = document.getElementById("vol-fits");
+  const body = document.querySelector("#vol-fits-table tbody");
+  body.innerHTML = "";
+
+  if (report.fits.length === 0) {
+    details.hidden = true;
+    return;
+  }
+
+  // Меньший AIC — лучше описывает этот ряд. Помечаем, чтобы не считать
+  // в уме, какое из двух чисел меньше.
+  const best = Math.min(...report.fits.map((fit) => fit.aic));
+
+  for (const fit of report.fits) {
+    const row = document.createElement("tr");
+
+    appendCell(row, fit.aic === best ? `${fit.name} — лучше` : fit.name);
+    appendCell(row, fit.aic.toFixed(1), "num");
+    appendCell(row, `${(fit.next_day * 100).toFixed(2)}%`, "num");
+    appendCell(row, `${(fit.term * 100).toFixed(2)}%`, "num");
+    appendCell(row, Object.entries(fit.params)
+      .map(([name, value]) => `${name} ${value.toFixed(4)}`)
+      .join(" · "));
+
+    body.append(row);
+  }
+
+  details.hidden = false;
+}
+
+
+/** Пояснение под таблицей: на чём подгоняли и что из этого не вышло. */
+function volatilityNote(report) {
+  const parts = [
+    `${report.days_to_expiry} дн. до экспирации`,
+    `модели подогнаны на ${report.observations} днях истории`,
+  ];
+
+  if (report.warning) {
+    parts.push(report.warning);
+  }
+
+  return parts.join(" · ");
+}
+
+
 // --- расчёт ---------------------------------------------------------
 
 /** Выбор модели: кнопки работают как переключатель, а не как запуск. */
@@ -457,7 +582,6 @@ function selectModel(model) {
   // Результат относится к прежней модели — прячем, чтобы не выглядело
   // так, будто это посчитала вновь выбранная.
   resultCard.hidden = true;
-  compareCard.hidden = true;
 }
 
 
@@ -475,13 +599,20 @@ async function runModel() {
   setButtonsDisabled(true);
   setStatus(calcStatus, `${MODEL_NAMES[selectedModel]}: считаем…`);
 
+  const params = readParams();
+
+  // Рыночную цену спрашиваем сразу, не дожидаясь расчёта: она идёт в
+  // сеть за цепочкой (сотни миллисекунд), расчёт считается на месте
+  // (единицы). Последовательно было бы вдвое дольше без всякой причины.
+  const market = loadMarketPrice(params);
+
   try {
     const result = await postJSON("/api/price", {
-      ...readParams(),
+      ...params,
       model: selectedModel,
     });
     renderResult(result);
-    compareCard.hidden = true;
+    renderMarketPrice(await market, result.price);
     setStatus(calcStatus, result.calculation_id === null
       ? "Расчёт выполнен, но сохранить в историю не удалось"
       : "");
@@ -491,6 +622,78 @@ async function runModel() {
   } finally {
     setButtonsDisabled(false);
   }
+}
+
+
+/** Рыночная цена этого же контракта: за сколько его торгуют сейчас.
+ *
+ * Запрос к GET /api/instruments/{ticker}/quote. Ошибку не пробрасываем:
+ * отсутствие контракта на выбранный страйк — обычное дело и не повод
+ * отменять посчитанную цену. Возвращаем либо котировку, либо текст
+ * объяснения.
+ */
+async function loadMarketPrice(params) {
+  const query = new URLSearchParams({
+    expiry: params.expiry,
+    strike: String(params.strike),
+    option_type: params.option_type,
+  });
+
+  try {
+    return {
+      quote: await getJSON(`/api/instruments/${params.ticker}/quote?${query}`),
+    };
+  } catch (error) {
+    return { problem: error.message };
+  }
+}
+
+
+function renderMarketPrice(market, ourPrice) {
+  const block = document.getElementById("market-block");
+  const status = document.getElementById("r-market-status");
+
+  if (market.problem) {
+    block.hidden = true;
+    setStatus(status, `Рыночную цену не показать: ${market.problem}`);
+    return;
+  }
+
+  const quote = market.quote;
+  const currency = snapshot?.currency ?? "USD";
+
+  setText("r-market", formatMoney(quote.mid, currency));
+  setText("r-market-note",
+    `bid ${quote.bid.toFixed(2)} · ask ${quote.ask.toFixed(2)} · `
+    + `спред ${quote.spread.toFixed(2)} · сделок за день `
+    + `${quote.volume ?? "—"} · открытых позиций ${quote.open_interest ?? "—"}`);
+
+  block.hidden = false;
+  setStatus(status, marketVerdict(quote, ourPrice));
+}
+
+
+/** Главное сравнение: попала ли наша цена внутрь спреда.
+ *
+ * Внутри — значит рынок с нами согласен в пределах собственной
+ * неопределённости: по такой цене там реально торгуют. Вне спреда
+ * расхождение уже содержательное, и видно, в какую сторону.
+ */
+function marketVerdict(quote, ourPrice) {
+  const gap = ourPrice - quote.mid;
+  const percent = quote.mid > 0 ? (gap / quote.mid) * 100 : 0;
+  const sign = gap >= 0 ? "+" : "−";
+  const size = `${sign}${Math.abs(gap).toFixed(2)} (${sign}${Math.abs(percent).toFixed(1)}%)`;
+
+  if (ourPrice >= quote.bid && ourPrice <= quote.ask) {
+    return `Расчёт ${size} от середины — внутри спреда, по этой цене рынок `
+      + `и торгует. Разногласия нет.`;
+  }
+
+  const direction = gap > 0 ? "дороже" : "дешевле";
+  return `Расчёт ${size} от середины и выходит за спред: модель считает `
+    + `опцион ${direction} рынка. Чаще всего дело в волатильности — `
+    + `подставьте подразумеваемую вместо исторической.`;
 }
 
 
@@ -556,7 +759,6 @@ async function runComparison() {
     resultCard.hidden = true;
     setStatus(calcStatus, "");
   } catch (error) {
-    compareCard.hidden = true;
     setStatus(calcStatus, error.message, true);
   } finally {
     setButtonsDisabled(false);
@@ -605,7 +807,7 @@ function renderComparison(comparison) {
     body.append(row);
   }
 
-  compareCard.hidden = false;
+  showTab("compare-card");
   setStatus(compareNote, comparisonNote(comparison, priced));
 }
 
@@ -649,6 +851,172 @@ function comparisonNote(comparison, priced) {
 
   const warnings = priced.filter((item) => item.warning).map((item) => item.warning);
   return [parts.join(" · "), ...warnings].join(" | ");
+}
+
+
+// --- профили греков -------------------------------------------------
+
+/** Профили греков: поведение при большом сдвиге параметров, а не малом.
+ *
+ * Запрос к POST /api/price/profiles, кривые считает Python
+ * (`pricing_service.greek_profiles`), здесь только отрисовка через Plotly.
+ */
+async function loadProfiles() {
+  if (!validate()) {
+    setStatus(profilesNote, "Сначала исправьте параметры выше", true);
+    return;
+  }
+
+  const button = document.getElementById("load-profiles");
+  button.disabled = true;
+  setStatus(profilesNote, "Строим кривые…");
+
+  try {
+    const report = await postJSON("/api/price/profiles", {
+      ...readParams(),
+      model: selectedModel,
+    });
+
+    renderProfile("profile-delta", report.delta_vs_spot, {
+      xTitle: "цена базового актива",
+      yTitle: "delta",
+      marker: report.strike,
+      markerLabel: "страйк",
+    });
+    renderProfile("profile-gamma", report.gamma_vs_spot, {
+      xTitle: "цена базового актива",
+      yTitle: "gamma",
+      marker: report.strike,
+      markerLabel: "страйк",
+    });
+    renderProfile("profile-theta", report.theta_vs_days, {
+      xTitle: "дней до экспирации",
+      yTitle: "theta, на календарный день",
+    });
+
+    setStatus(profilesNote, profilesNote0(report));
+  } catch (error) {
+    for (const id of ["profile-delta", "profile-gamma", "profile-theta"]) {
+      document.getElementById(id).hidden = true;
+    }
+    setStatus(profilesNote, error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+
+/** Одна кривая плюс точка «ты здесь». */
+function renderProfile(figureId, curve, options) {
+  const figure = document.getElementById(figureId);
+  const plot = document.getElementById(`${figureId}-plot`);
+
+  if (curve.x.length < 2) {
+    figure.hidden = true;
+    Plotly.purge(plot);
+    return;
+  }
+
+  figure.hidden = false;
+
+  const traces = [
+    {
+      type: "scatter",
+      mode: "lines",
+      x: curve.x,
+      y: curve.y,
+      line: { color: CHART_COLORS.primary, width: 2 },
+      hovertemplate: "%{y:.5f}<br>%{x:.2f}<extra></extra>",
+    },
+    {
+      // Текущие параметры отдельным рядом из одной точки: без неё кривая
+      // красивая, но непонятно, к чему она относится.
+      type: "scatter",
+      mode: "markers",
+      x: [curve.current_x],
+      y: [curve.current_y],
+      marker: {
+        size: 11,
+        color: CHART_COLORS.call,
+        line: { width: 2, color: CHART_COLORS.surface },
+      },
+      hovertemplate: "сейчас: %{y:.5f}<extra></extra>",
+    },
+  ];
+
+  Plotly.newPlot(plot, traces, profileLayout(curve, options), {
+    displayModeBar: false,
+    responsive: true,
+  });
+}
+
+
+function profileLayout(curve, options) {
+  const axis = {
+    gridcolor: CHART_COLORS.grid,
+    gridwidth: 1,
+    zeroline: false,
+    linecolor: CHART_COLORS.grid,
+    tickfont: { size: 11, color: CHART_COLORS.muted },
+    titlefont: { size: 11, color: CHART_COLORS.muted },
+  };
+
+  const shapes = [
+    {
+      // Нулевой уровень: у дельты пута и у теты все значения ниже нуля, и
+      // без этой линии не видно, насколько.
+      type: "line", yref: "y", y0: 0, y1: 0,
+      xref: "paper", x0: 0, x1: 1,
+      line: { color: CHART_COLORS.muted, width: 1 }, opacity: 0.4,
+    },
+  ];
+
+  if (options.marker !== undefined) {
+    shapes.push({
+      type: "line", xref: "x", x0: options.marker, x1: options.marker,
+      yref: "paper", y0: 0, y1: 1,
+      line: { color: CHART_COLORS.muted, width: 1 }, opacity: 0.45,
+    });
+  }
+
+  return {
+    height: 300,
+    margin: { l: 64, r: 16, t: 12, b: 52 },
+    paper_bgcolor: CHART_COLORS.surface,
+    plot_bgcolor: CHART_COLORS.surface,
+    font: { family: CHART_FONT, color: CHART_COLORS.text },
+    hovermode: "closest",
+    hoverlabel: {
+      bgcolor: CHART_COLORS.surface,
+      bordercolor: CHART_COLORS.grid,
+      font: { family: CHART_FONT, size: 12, color: CHART_COLORS.text },
+    },
+    showlegend: false,
+    xaxis: { ...axis, title: { text: options.xTitle } },
+    yaxis: { ...axis, title: { text: options.yTitle } },
+    shapes: shapes,
+    annotations: options.marker === undefined ? [] : [
+      {
+        x: options.marker, yref: "paper", y: 1,
+        text: options.markerLabel,
+        showarrow: false, yshift: 8,
+        font: { size: 11, color: CHART_COLORS.muted },
+      },
+    ],
+  };
+}
+
+
+/** Пояснение под графиками: чем считали и что на них искать. */
+function profilesNote0(report) {
+  const style = report.exercise === "american" ? "Американский" : "Европейский";
+  const why = report.model === "black_scholes"
+    ? "Блэком-Шоулзом — для европейского стиля это точное значение, "
+      + "к которому дерево и Монте-Карло лишь сходятся"
+    : "биномиальным деревом — американский стиль умеет только оно";
+
+  return `${style} стиль · T = ${report.days_to_expiry} дн. · `
+    + `страйк ${report.strike} · кривые посчитаны ${why}`;
 }
 
 
@@ -728,16 +1096,18 @@ function renderChain(chain) {
 
 // Цвета повторяют те, что заданы в style.css для .chart. Plotly принимает
 // только настоящие значения, переменные CSS ему передать нельзя.
+// Тёмный столбец проверенной палитры, а не перекрашенный светлый: для
+// тёмной поверхности ступени подобраны отдельно. Ключи call/put
+// используются улыбкой напрямую по типу опциона; primary — тот же слот 1
+// для графиков с единственным рядом.
 const CHART_COLORS = {
-  // Ключи call/put используются улыбкой напрямую по типу опциона;
-  // primary — тот же слот 1 для графиков с единственным рядом.
-  call: "#2a78d6",
-  put: "#eb6834",
-  primary: "#2a78d6",
-  surface: "#ffffff",
-  grid: "#e8eaed",
-  text: "#1c1e21",
-  muted: "#6b7280",
+  call: "#3987e5",
+  put: "#d95926",
+  primary: "#3987e5",
+  surface: "#1a1a19",
+  grid: "#383835",
+  text: "#ffffff",
+  muted: "#c3c2b7",
 };
 
 const CHART_FONT = '-apple-system, system-ui, "Segoe UI", sans-serif';
@@ -1256,18 +1626,53 @@ function setStatus(element, text, isError = false) {
 }
 
 
+// --- закладки -------------------------------------------------------
+
+// Какая закладка открыта. Запоминаем, чтобы при смене бумаги вернуться к
+// той же, а не сбрасывать пользователя на первую.
+let activeTab = "compare-card";
+
+
+/** Открыть закладку и пересчитать размеры графиков внутри неё.
+ *
+ * Пересчёт обязателен: Plotly, нарисованный в скрытом элементе, получает
+ * нулевую ширину и схлопывается в полоску. Пока закладка была спрятана,
+ * график мог быть построен именно так, и починить это можно только после
+ * того, как элемент стал видимым.
+ */
+function showTab(paneId) {
+  activeTab = paneId;
+
+  for (const pane of document.querySelectorAll(".tabpane")) {
+    pane.hidden = pane.id !== paneId;
+  }
+
+  for (const tab of document.querySelectorAll(".tab")) {
+    tab.setAttribute("aria-selected", String(tab.dataset.pane === paneId));
+  }
+
+  const pane = document.getElementById(paneId);
+  for (const plot of pane.querySelectorAll(".plot")) {
+    if (plot.querySelector(".plot-container")) {
+      Plotly.Plots.resize(plot);
+    }
+  }
+}
+
+
 // --- события --------------------------------------------------------
 
 select.addEventListener("change", () => {
   if (!select.value) {
     marketCard.hidden = true;
     paramsCard.hidden = true;
+    volCard.hidden = true;
     calcCard.hidden = true;
     resultCard.hidden = true;
-    compareCard.hidden = true;
-    chainCard.hidden = true;
-    parityCard.hidden = true;
-    convergenceCard.hidden = true;
+    document.getElementById("tabs-card").hidden = true;
+    for (const pane of document.querySelectorAll(".tabpane")) {
+      pane.hidden = true;
+    }
     snapshot = null;
     setStatus(instrumentStatus, "");
     return;
@@ -1319,6 +1724,12 @@ for (const button of document.querySelectorAll("button[data-sigma]")) {
 
 document.getElementById("load-chain").addEventListener("click", loadChain);
 document.getElementById("load-parity").addEventListener("click", loadParity);
+document.getElementById("load-profiles").addEventListener("click", loadProfiles);
+document.getElementById("load-vol").addEventListener("click", loadVolatility);
+
+for (const tab of document.querySelectorAll(".tab")) {
+  tab.addEventListener("click", () => showTab(tab.dataset.pane));
+}
 document.getElementById("load-convergence").addEventListener("click", loadConvergence);
 
 document.getElementById("sync-instruments").addEventListener("click", syncInstruments);

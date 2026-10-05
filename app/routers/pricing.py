@@ -22,6 +22,7 @@ from app.schemas.pricing import (
     CompareRequest,
     CompareResponse,
     ConvergenceReport,
+    GreekProfiles,
     PriceMeta,
     PriceRequest,
     PriceResponse,
@@ -176,6 +177,31 @@ async def post_convergence(
             "считает только европейский стиль. Переключите стиль исполнения",
         ) from None
     except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
+        ) from None
+
+
+@router.post("/price/profiles", summary="Профили греков")
+@limiter.limit(settings.pricing_rate_limit)
+async def post_profiles(request: Request, body: PriceRequest) -> GreekProfiles:
+    """Как греки ведут себя при большом сдвиге параметров, а не малом.
+
+    В историю не пишется: это не расчёт цены, а картина поведения модели
+    вокруг заданной точки — три сотни промежуточных значений засорили бы
+    таблицу.
+    """
+    try:
+        # Сто двадцать построений для европейского стиля или шестьдесят
+        # деревьев для американского: event loop на них держать нельзя.
+        async with pricing_slot():
+            return await run_in_threadpool(pricing_service.greek_profiles, body)
+    except market_data.InstrumentNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Инструмент {body.ticker} не найден в списке доступных",
+        ) from None
+    except (AmericanNotSupported, InvalidTreeParameters, ValueError) as error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
         ) from None

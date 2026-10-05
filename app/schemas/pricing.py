@@ -220,3 +220,37 @@ class ConvergenceReport(BaseModel):
         default_factory=list,
         description="Число шагов, при котором дерево отказалось считать",
     )
+
+
+class GreekCurve(BaseModel):
+    """Одна кривая профиля: как грек меняется вдоль одного параметра.
+
+    Массивами, а не списком точек: Plotly принимает именно массивы, и JSON
+    выходит вдвое короче на тех же данных.
+    """
+
+    x: list[float]
+    y: list[float]
+
+    current_x: float = Field(description="Где на кривой текущие параметры")
+    current_y: float = Field(description="И значение грека в этой точке")
+
+
+class GreekProfiles(BaseModel):
+    """Профили греков вокруг заданных параметров.
+
+    Одно число греков говорит, как поведёт себя цена при малом сдвиге.
+    Профиль показывает, что будет при большом: где дельта переломится,
+    где гамма достигнет максимума, как ускорится распад к экспирации.
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    model: PricingModel = Field(description="Чем считались кривые")
+    exercise: ExerciseStyle
+    strike: float
+    days_to_expiry: int
+
+    delta_vs_spot: GreekCurve
+    gamma_vs_spot: GreekCurve
+    theta_vs_days: GreekCurve = Field(description="По дням до экспирации")

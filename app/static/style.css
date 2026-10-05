@@ -1,11 +1,33 @@
+/* Терминальная тема, две колонки, закладки.
+ *
+ * Цвета взяты из проверенной палитры, а не подобраны на глаз, и именно из
+ * её тёмного столбца: тёмная тема это отдельно подобранные ступени, а не
+ * перекрашенные светлые. Поверхность #1a1a19, ряды графиков #3987e5 и
+ * #d95926, нейтральный #383835 на линейки и рамки, состояния из
+ * отдельного набора, который никогда не путается с рядами.
+ */
+
 :root {
-  --bg: #f6f7f9;
-  --card: #ffffff;
-  --text: #1c1e21;
-  --muted: #6b7280;
-  --border: #dfe3e8;
-  --accent: #2563eb;
-  --error: #b91c1c;
+  color-scheme: dark;
+
+  --bg: #121211;
+  --card: #1a1a19;       /* та же поверхность, что у графиков: они лежат заподлицо */
+  --raised: #222221;
+  --text: #ffffff;
+  --muted: #c3c2b7;
+  --dim: #8a8781;
+  --border: #383835;
+  --accent: #3987e5;     /* слот 1 тёмного столбца */
+  --accent-2: #d95926;   /* слот 2 */
+
+  /* Состояния — отдельный набор, не из ряда графиков: цвет состояния не
+   * должен выглядеть как ещё один ряд данных. */
+  --good: #0ca30c;
+  --warning: #fab219;
+  --error: #d03b3b;
+
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
+          "Liberation Mono", monospace;
 }
 
 * {
@@ -13,203 +35,200 @@
 }
 
 body {
-  font-family: -apple-system, system-ui, "Segoe UI", sans-serif;
+  /* Моноширинный по всей странице: в терминале ровные колонки цифр важнее
+   * удобства чтения прозы, а прозы здесь немного. */
+  font-family: var(--mono);
+  font-size: 13px;
   background: var(--bg);
   color: var(--text);
   margin: 0;
-  padding: 2rem 1rem 4rem;
+  padding: 0;
   line-height: 1.5;
 }
 
-header,
-.card {
-  max-width: 820px;
-  margin: 0 auto;
+/* --- заголовок --- */
+
+header {
+  border-bottom: 1px solid var(--border);
+  padding: 0.6rem 1rem;
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
 }
 
 h1 {
-  font-size: 1.6rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
   margin: 0;
 }
 
 .subtitle {
-  color: var(--muted);
-  margin: 0.25rem 0 1.5rem;
+  color: var(--dim);
+  margin: 0;
+  font-size: 0.8rem;
 }
+
+/* --- две колонки --- */
+
+.shell {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: 1px;
+  background: var(--border);   /* щель между колонками рисуется фоном */
+  min-height: calc(100vh - 2.6rem);
+  align-items: start;
+}
+
+.pane {
+  background: var(--bg);
+  min-width: 0;                /* иначе широкая таблица растягивает колонку */
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.pane--inputs {
+  /* Ввод всегда перед глазами: результат справа прокручивается, параметры
+   * остаются. */
+  position: sticky;
+  top: 0;
+  max-height: 100vh;
+  overflow-y: auto;
+}
+
+@media (max-width: 900px) {
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .pane--inputs {
+    position: static;
+    max-height: none;
+  }
+}
+
+/* --- панель --- */
 
 .card {
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 1.25rem 1.5rem 1.5rem;
+  padding: 0.7rem 0.8rem 0.8rem;
 }
 
-h2 {
-  font-size: 1rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-  margin: 0 0 1rem;
+.card[hidden] {
+  display: none;
 }
-
-label {
-  display: block;
-  font-size: 0.9rem;
-  margin-bottom: 0.35rem;
-}
-
-select {
-  width: 100%;
-  max-width: 380px;
-  padding: 0.55rem 0.7rem;
-  font-size: 1rem;
-  font-family: inherit;
-  color: var(--text);
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-
-select:focus {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-select:disabled {
-  color: var(--muted);
-  background: var(--bg);
-}
-
-.status {
-  font-size: 0.85rem;
-  color: var(--muted);
-  margin: 0.75rem 0 0;
-  min-height: 1.25rem;
-}
-
-.status.error {
-  color: var(--error);
-}
-
-.card + .card {
-  margin-top: 1rem;
-}
-
-.metrics {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 0.75rem;
-  margin: 0;
-}
-
-.metric {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0.7rem 0.85rem;
-}
-
-.metric--wide {
-  grid-column: 1 / -1;
-}
-
-.metric dt {
-  font-size: 0.8rem;
-  color: var(--muted);
-  margin-bottom: 0.3rem;
-}
-
-.metric dd {
-  font-size: 1.25rem;
-  font-variant-numeric: tabular-nums;
-  margin: 0;
-}
-
-.metric--wide dd {
-  font-size: 1.7rem;
-}
-
-.sym {
-  font-style: italic;
-  color: var(--accent);
-}
-
-/* --- форма параметров --- */
 
 .card-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 1rem;
+  gap: 0.75rem;
+  margin-bottom: 0.6rem;
+}
+
+h2 {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin: 0;
 }
 
 h3 {
-  font-size: 0.8rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-  margin: 1.5rem 0 0.75rem;
+  color: var(--dim);
+  margin: 1rem 0 0.5rem;
+}
+
+/* --- поля --- */
+
+label {
+  display: block;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 0.2rem;
+}
+
+select,
+input {
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 13px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 0.35rem 0.45rem;
+}
+
+input[type="number"] {
+  /* Цифры в колонку: с пропорциональными разряды прыгают при наборе. */
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+select:focus,
+input:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem 0.6rem;
 }
 
 .field label {
-  font-size: 0.85rem;
-  color: var(--muted);
-}
-
-input[type="number"] {
-  width: 100%;
-  padding: 0.5rem 0.65rem;
-  font-size: 1rem;
-  font-family: inherit;
-  font-variant-numeric: tabular-nums;
-  color: var(--text);
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-
-input[type="number"]:focus,
-.segmented input:focus-visible + span {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  margin-bottom: 0.2rem;
 }
 
 .hint {
-  font-size: 0.75rem;
-  color: var(--muted);
-  margin: 0.35rem 0 0;
-  min-height: 1rem;
+  font-size: 0.72rem;
+  color: var(--dim);
+  margin: 0.3rem 0 0;
+  line-height: 1.45;
 }
+
+.sym {
+  color: var(--accent);
+}
+
+/* --- переключатели --- */
 
 .segmented {
   display: flex;
   border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
 }
 
 .segmented label {
   flex: 1;
+  margin: 0;
 }
 
 .segmented input {
   position: absolute;
   opacity: 0;
-  pointer-events: none;
+  width: 0;
+  height: 0;
 }
 
 .segmented span {
   display: block;
-  padding: 0.5rem 0.4rem;
-  font-size: 0.9rem;
   text-align: center;
-  background: var(--card);
+  padding: 0.3rem 0.2rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
   cursor: pointer;
 }
 
@@ -219,37 +238,31 @@ input[type="number"]:focus,
 
 .segmented input:checked + span {
   background: var(--accent);
-  color: #fff;
+  color: #ffffff;
 }
 
-.link {
-  font: inherit;
-  font-size: 0.8rem;
-  color: var(--accent);
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  text-decoration: underline;
+.segmented input:focus-visible + span {
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
 }
 
-/* --- кнопки моделей и результат --- */
+/* --- кнопки --- */
 
 .buttons {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.6rem;
+  gap: 0.4rem;
 }
 
 .btn {
-  flex: 1 1 200px;
-  padding: 0.7rem 1rem;
-  font: inherit;
-  font-size: 0.95rem;
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: var(--raised);
   color: var(--text);
-  background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  padding: 0.35rem 0.6rem;
   cursor: pointer;
 }
 
@@ -257,71 +270,163 @@ input[type="number"]:focus,
   border-color: var(--accent);
 }
 
-/* Выбранная модель — рамка и подложка, но не заливка: заливка занята
-   кнопкой запуска, иначе непонятно, что именно нажимать. */
 .btn--active {
   border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--accent);
   color: var(--accent);
-  font-weight: 500;
 }
 
 .btn--primary {
-  color: #fff;
   background: var(--accent);
   border-color: var(--accent);
-  font-weight: 500;
+  color: #ffffff;
 }
 
 .btn--wide {
   width: 100%;
-  margin-top: 0.9rem;
-  padding: 0.8rem;
-  font-size: 1rem;
 }
 
 .btn:disabled {
-  color: var(--muted);
-  cursor: not-allowed;
-  opacity: 0.6;
+  opacity: 0.45;
+  cursor: default;
+}
+
+.link {
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+}
+
+.link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.link:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .badge {
-  font-size: 0.75rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--accent);
-  border: 1px solid var(--accent);
-  border-radius: 999px;
-  padding: 0.15rem 0.6rem;
-}
-
-.price-block {
-  background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 1rem 1.25rem;
+  padding: 0.1rem 0.35rem;
 }
 
-.price-label {
-  font-size: 0.8rem;
-  color: var(--muted);
+/* --- показатели --- */
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 1px;
+  margin: 0;
+  background: var(--border);
 }
 
-.price-value {
-  font-size: 2.4rem;
+.metric {
+  background: var(--card);
+  padding: 0.45rem 0.55rem;
+}
+
+.metric--wide {
+  grid-column: 1 / -1;
+}
+
+.metric dt {
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.metric dd {
+  margin: 0.15rem 0 0;
+  font-size: 1rem;
   font-variant-numeric: tabular-nums;
-  line-height: 1.2;
 }
 
-.price-note {
-  font-size: 0.8rem;
-  color: var(--muted);
+.metric--wide dd {
+  font-size: 1.5rem;
 }
 
 .metric .hint {
-  margin-top: 0.25rem;
+  margin-top: 0.15rem;
 }
 
-/* --- история --- */
+/* --- цена --- */
+
+.price-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 1px;
+  background: var(--border);
+}
+
+.price-block {
+  background: var(--card);
+  padding: 0.6rem 0.75rem;
+}
+
+.price-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.price-value {
+  font-size: 2rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+}
+
+.price-note {
+  font-size: 0.72rem;
+  color: var(--dim);
+  line-height: 1.45;
+}
+
+/* --- закладки --- */
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+}
+
+.tab {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: var(--card);
+  color: var(--dim);
+  border: none;
+  padding: 0.4rem 0.7rem;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab[aria-selected="true"] {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.tabpane[hidden] {
+  display: none;
+}
+
+/* --- таблицы --- */
 
 .table-scroll {
   overflow-x: auto;
@@ -330,77 +435,144 @@ input[type="number"]:focus,
 table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.85rem;
+  font-size: 0.76rem;
   font-variant-numeric: tabular-nums;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
 
-th, td {
-  padding: 0.4rem 0.6rem;
-  text-align: left;
-  border-bottom: 1px solid var(--border);
-}
-
 th {
-  font-weight: 500;
-  font-size: 0.75rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: var(--muted);
+  color: var(--dim);
+  font-weight: 600;
 }
 
-td.num, th.num {
+td.num,
+th.num {
   text-align: right;
 }
 
-tbody tr:hover {
-  background: var(--bg);
+tr.unavailable td {
+  color: var(--dim);
+}
+
+/* --- сообщения --- */
+
+.status {
+  font-size: 0.72rem;
+  color: var(--dim);
+  margin: 0.5rem 0 0;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.status.error {
+  color: var(--error);
 }
 
 .warning {
-  margin: 0 0 1rem;
-  padding: 0.7rem 0.9rem;
-  font-size: 0.85rem;
-  color: #7c2d12;
-  background: #fff7ed;
-  border: 1px solid #fdba74;
-  border-radius: 8px;
+  font-size: 0.74rem;
+  color: var(--warning);
+  border: 1px solid var(--warning);
+  padding: 0.4rem 0.55rem;
+  margin: 0 0 0.6rem;
+  line-height: 1.45;
 }
 
-/* Модель, которая отказалась считать, — приглушённой строкой. */
-tr.unavailable td {
-  color: var(--muted);
-  font-style: italic;
+/* Значок перед текстом: состояние не должно опираться на один цвет. */
+.warning::before {
+  content: "!  ";
+  font-weight: 600;
 }
 
-td.reference {
-  color: var(--muted);
-}
-
-/* --- график улыбки волатильности --- */
+/* --- графики --- */
 
 .chart {
-  /* Слоты 1 и 2 референсной палитры: проверены на различимость при
-     дальтонизме во всех попарных сочетаниях. Те же значения продублированы
-     в app.js константой SMILE_COLORS — Plotly не понимает переменные CSS. */
-  --series-call: #2a78d6;
-  --series-put: #eb6834;
-
-  margin: 0 0 1rem;
+  margin: 0 0 0.75rem;
 }
 
 .chart figcaption {
-  font-size: 0.9rem;
-  margin-bottom: 0.5rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 0.3rem;
 }
 
 .plot {
-  position: relative;
+  width: 100%;
 }
 
-#chain-details summary {
-  font-size: 0.85rem;
+details summary {
+  font-size: 0.72rem;
   color: var(--accent);
   cursor: pointer;
-  margin-bottom: 0.6rem;
+  margin: 0.5rem 0;
+}
+
+/* --- командная строка --- */
+
+.console {
+  border: 1px solid var(--border);
+  background: var(--card);
+  display: flex;
+  flex-direction: column;
+}
+
+.console-log {
+  font-size: 0.74rem;
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 0.5rem 0.6rem;
+  margin: 0;
+  white-space: pre-wrap;
+  color: var(--muted);
+}
+
+.console-log:empty {
+  display: none;
+}
+
+.console-log .echo {
+  color: var(--accent);
+}
+
+.console-log .fail {
+  color: var(--error);
+}
+
+.console-line {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  border-top: 1px solid var(--border);
+  padding: 0.4rem 0.6rem;
+}
+
+.console-log:empty + .console-line {
+  border-top: none;
+}
+
+.console-prompt {
+  color: var(--accent);
+  user-select: none;
+}
+
+.console-line input {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 0.8rem;
+}
+
+.console-line input:focus {
+  outline: none;
 }

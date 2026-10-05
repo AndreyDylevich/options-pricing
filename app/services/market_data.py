@@ -37,6 +37,12 @@ RISK_FREE_TICKER = "^IRX"
 # Глубина истории. Двух лет хватает на окно в 252 дня с запасом.
 HISTORY_PERIOD = "2y"
 
+# Отдельная, более длинная история — под GARCH и EGARCH. Двух лет им мало:
+# это около 500 наблюдений на четыре параметра, и оценки гуляют сильнее
+# самой волатильности. Пять лет дают порядка 1250 точек. Тянется только по
+# запросу, обычному расчёту эта история не нужна.
+VOLATILITY_HISTORY_PERIOD = "5y"
+
 # Скринер, из которого берётся список бумаг. most_actives — самые
 # ликвидные за день: по неликвиду цепочки опционов либо нет, либо в ней
 # пустые котировки.
@@ -296,7 +302,9 @@ def get_risk_free_rate() -> float:
     return float(history["Close"].iloc[-1]) / 100
 
 
-def _load_history(yf_ticker: yf.Ticker, ticker: str) -> pd.DataFrame:
+def _load_history(
+    yf_ticker: yf.Ticker, ticker: str, period: str = HISTORY_PERIOD
+) -> pd.DataFrame:
     """Дневные свечи за два года.
 
     auto_adjust=True принципиален: без него в ряду остаются провалы в дни
@@ -304,9 +312,7 @@ def _load_history(yf_ticker: yf.Ticker, ticker: str) -> pd.DataFrame:
     чего волатильность оказывается завышенной на пустом месте.
     """
     try:
-        history = yf_ticker.history(
-            period=HISTORY_PERIOD, interval="1d", auto_adjust=True
-        )
+        history = yf_ticker.history(period=period, interval="1d", auto_adjust=True)
     except Exception as error:
         raise MarketDataUnavailable(f"{ticker}: {error}") from error
 
@@ -314,6 +320,22 @@ def _load_history(yf_ticker: yf.Ticker, ticker: str) -> pd.DataFrame:
         raise MarketDataUnavailable(f"{ticker}: источник вернул пустую историю")
 
     return history
+
+
+def get_log_returns(ticker: str, period: str = VOLATILITY_HISTORY_PERIOD) -> np.ndarray:
+    """Логарифмические доходности массивом numpy.
+
+    Наружу уходит именно массив, а не Series: pandas за границы этого
+    модуля не выходит, а моделям волатильности в `app/pricing/` ничего
+    кроме чисел и не нужно.
+    """
+    instrument = find_instrument(ticker)
+    if instrument is None:
+        raise InstrumentNotFound(ticker)
+
+    history = _load_history(yf.Ticker(instrument.ticker), instrument.ticker, period)
+
+    return np.log(history["Close"]).diff().dropna().to_numpy()
 
 
 def _historical_volatilities(close: pd.Series) -> dict[int, float | None]:

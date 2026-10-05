@@ -193,3 +193,77 @@ class ParityReport(BaseModel):
     verdict: str = Field(description="Вывод по-русски: сходится или нет и насколько")
 
     rows: list[ParityRow]
+
+
+class ContractQuote(BaseModel):
+    """Рыночная цена конкретного контракта — то, за что его торгуют сейчас.
+
+    Цена последней сделки сюда намеренно не входит: сделка могла
+    состояться неделю назад при другой цене актива, и сравнивать с ней
+    расчёт бессмысленно. По той же причине и волатильность в проекте
+    считается от середины спреда.
+    """
+
+    ticker: str
+    expiry: str
+    strike: float
+    option_type: OptionType
+
+    bid: float
+    ask: float
+    mid: float = Field(description="Середина спреда — с ней и сравнивается расчёт")
+    spread: float = Field(description="ask - bid, ширина неопределённости рынка")
+
+    volume: int | None = Field(default=None, description="Сделок за день")
+    open_interest: int | None = Field(default=None, description="Открытых позиций")
+
+
+class VolatilityOption(BaseModel):
+    """Одна строка таблицы выбора: чем посчитана σ и сколько получилось."""
+
+    key: str = Field(description="Идентификатор для кнопки выбора")
+    label: str = Field(description="Название способа по-русски")
+    sigma: float = Field(description="Годовая волатильность, доля единицы")
+    note: str = Field(description="Чем этот способ отличается от остальных")
+
+
+class VolatilityModelFit(BaseModel):
+    """Подогнанная модель: параметры и качество.
+
+    Нужна не для выбора, а для понимания: по коэффициентам видно, почему
+    прогноз получился таким, а по AIC — какая из двух моделей лучше
+    описывает этот конкретный ряд.
+    """
+
+    name: str
+    params: dict[str, float]
+    log_likelihood: float
+    aic: float = Field(description="Критерий Акаике: чем меньше, тем лучше")
+
+    next_day: float = Field(description="Прогноз на завтра, годовая доля")
+    term: float = Field(description="Средняя по сроку опциона — она и идёт в цену")
+
+
+class VolatilityReport(BaseModel):
+    """Оценки волатильности, посчитанные по истории цен.
+
+    Историческая смотрит назад одним окном и считает все дни равноценными.
+    GARCH и EGARCH смотрят туда же, но учитывают, что спокойные и бурные
+    периоды идут сгустками, и дают прогноз на срок опциона.
+
+    Подразумеваемой здесь нет: подставив её в модель, получаешь рыночную
+    цену обратно — она из этой цены и выведена. Её место в цепочке
+    опционов, рядом с улыбкой.
+    """
+
+    ticker: str
+    expiry: str
+    days_to_expiry: int
+    observations: int = Field(description="Дней истории, на которых подгонялись модели")
+
+    options: list[VolatilityOption]
+    fits: list[VolatilityModelFit]
+
+    warning: str | None = Field(
+        default=None, description="Что из таблицы не удалось посчитать и почему"
+    )

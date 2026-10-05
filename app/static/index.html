@@ -17,6 +17,8 @@
     <p class="subtitle">Блэк-Шоулз · биномиальное дерево · Монте-Карло</p>
   </header>
 
+  <main class="shell">
+    <div class="pane pane--inputs">
   <section class="card">
     <div class="card-head">
       <h2>Базовый актив</h2>
@@ -168,6 +170,58 @@
     </form>
   </section>
 
+  <section class="card" id="vol-card" hidden>
+    <div class="card-head">
+      <h2>Волатильность: чем считать</h2>
+      <button type="button" id="load-vol" class="link">Подобрать модели</button>
+    </div>
+
+    <p class="hint">
+      Историческая смотрит назад одним окном и считает все дни равноценными.
+      GARCH и EGARCH смотрят туда же, но учитывают, что спокойные и бурные
+      периоды идут сгустками, и дают прогноз на срок опциона. Выберите
+      строку, и <span class="sym">σ</span> подставится в форму.
+      Подразумеваемую волатильность смотрите в цепочке опционов ниже:
+      подставлять её в модель смысла нет — она из рыночной цены и выведена,
+      так что эту же цену и вернёт.
+    </p>
+
+    <div class="table-scroll">
+      <table id="vol-table">
+        <thead>
+          <tr>
+            <th>Способ</th>
+            <th class="num"><span class="sym">σ</span> годовая</th>
+            <th>Чем отличается</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <details id="vol-fits" hidden>
+      <summary>Параметры подогнанных моделей</summary>
+
+      <div class="table-scroll">
+        <table id="vol-fits-table">
+          <thead>
+            <tr>
+              <th>Модель</th>
+              <th class="num">AIC</th>
+              <th class="num">На завтра</th>
+              <th class="num">За срок</th>
+              <th>Коэффициенты</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </details>
+
+    <p id="vol-note" class="status"></p>
+  </section>
+
   <section class="card" id="calc-card" hidden>
     <h2>Модель расчёта</h2>
 
@@ -193,7 +247,9 @@
 
     <p id="calc-status" class="status"></p>
   </section>
+    </div>
 
+    <div class="pane pane--results">
   <section class="card" id="result-card" hidden>
     <div class="card-head">
       <h2>Результат</h2>
@@ -202,11 +258,25 @@
 
     <p class="warning" id="r-warning" hidden></p>
 
-    <div class="price-block">
-      <div class="price-label">Цена опциона</div>
-      <div class="price-value" id="r-price">—</div>
-      <div class="price-note" id="r-note">—</div>
+    <!-- Две цены рядом, а не одна под другой: сравнивают их глазами, и
+         лишний сдвиг по вертикали этому мешает. Рыночная приходит
+         отдельным запросом — цепочка тянется из сети сотни миллисекунд,
+         а расчёт занимает единицы. -->
+    <div class="price-row">
+      <div class="price-block">
+        <div class="price-label">Цена по модели</div>
+        <div class="price-value" id="r-price">—</div>
+        <div class="price-note" id="r-note">—</div>
+      </div>
+
+      <div class="price-block" id="market-block" hidden>
+        <div class="price-label">Рыночная цена сейчас</div>
+        <div class="price-value" id="r-market">—</div>
+        <div class="price-note" id="r-market-note">—</div>
+      </div>
     </div>
+
+    <p class="status" id="r-market-status"></p>
 
     <h3>Греки</h3>
     <dl class="metrics">
@@ -240,7 +310,22 @@
     <p id="r-meta" class="status"></p>
   </section>
 
-  <section class="card" id="compare-card" hidden>
+    <div class="card" id="tabs-card" hidden>
+      <div class="tabs" role="tablist">
+        <button type="button" class="tab" role="tab" data-pane="compare-card"
+                aria-selected="true">Сравнение</button>
+        <button type="button" class="tab" role="tab" data-pane="profiles-card"
+                aria-selected="false">Профили греков</button>
+        <button type="button" class="tab" role="tab" data-pane="convergence-card"
+                aria-selected="false">Сходимость</button>
+        <button type="button" class="tab" role="tab" data-pane="chain-card"
+                aria-selected="false">Улыбка</button>
+        <button type="button" class="tab" role="tab" data-pane="parity-card"
+                aria-selected="false">Сверка с рынком</button>
+      </div>
+    </div>
+
+  <section class="card tabpane" id="compare-card" hidden>
     <h2>Сравнение моделей</h2>
 
     <div class="table-scroll">
@@ -265,7 +350,7 @@
     <p id="compare-note" class="status"></p>
   </section>
 
-  <section class="card" id="convergence-card" hidden>
+  <section class="card tabpane" id="convergence-card" hidden>
     <div class="card-head">
       <h2>Сходимость моделей</h2>
       <button type="button" id="load-convergence" class="link">
@@ -286,7 +371,38 @@
     <p id="convergence-note" class="status"></p>
   </section>
 
-  <section class="card" id="chain-card" hidden>
+  <section class="card tabpane" id="profiles-card" hidden>
+    <div class="card-head">
+      <h2>Профили греков</h2>
+      <button type="button" id="load-profiles" class="link">Построить профили</button>
+    </div>
+
+    <p class="hint">
+      Одно число грека говорит, что будет при малом сдвиге. Профиль
+      показывает, что будет при большом: где дельта переломится, где гамма
+      достигнет максимума, как ускорится распад к экспирации. Точка на
+      каждой кривой — ваши текущие параметры.
+    </p>
+
+    <figure class="chart" id="profile-delta" hidden>
+      <figcaption>Delta против цены базового актива</figcaption>
+      <div class="plot" id="profile-delta-plot"></div>
+    </figure>
+
+    <figure class="chart" id="profile-gamma" hidden>
+      <figcaption>Gamma против цены базового актива</figcaption>
+      <div class="plot" id="profile-gamma-plot"></div>
+    </figure>
+
+    <figure class="chart" id="profile-theta" hidden>
+      <figcaption>Theta против срока до экспирации</figcaption>
+      <div class="plot" id="profile-theta-plot"></div>
+    </figure>
+
+    <p id="profiles-note" class="status"></p>
+  </section>
+
+  <section class="card tabpane" id="chain-card" hidden>
     <div class="card-head">
       <h2>Подразумеваемая волатильность</h2>
       <button type="button" id="load-chain" class="link">Загрузить цепочку</button>
@@ -323,7 +439,7 @@
     <p id="chain-note" class="status"></p>
   </section>
 
-  <section class="card" id="parity-card" hidden>
+  <section class="card tabpane" id="parity-card" hidden>
     <div class="card-head">
       <h2>Сверка с рынком</h2>
       <button type="button" id="load-parity" class="link">Сверить</button>
@@ -390,10 +506,28 @@
     <p id="parity-note" class="status"></p>
   </section>
 
+    <div class="console">
+      <!-- Журнал команд. Пустой не занимает места: правило
+           .console-log:empty { display: none } в style.css. -->
+      <pre class="console-log" id="console-log"></pre>
+
+      <div class="console-line">
+        <span class="console-prompt">&gt;</span>
+        <input type="text" id="console-input" autocomplete="off"
+               spellcheck="false" placeholder="help — список команд">
+      </div>
+    </div>
+    </div>
+  </main>
+
+
   <!-- Урезанная сборка Plotly: scatter есть, 3D и карт нет. Лежит в
        проекте файлом, а не грузится с CDN, чтобы страница открывалась
        без интернета. -->
   <script src="/static/vendor/plotly-basic.min.js"></script>
   <script src="/static/app.js"></script>
+  <!-- Командная строка: загружается после app.js и вызывает его
+       функции — сборки нет, оба файла в одной области видимости. -->
+  <script src="/static/command.js"></script>
 </body>
 </html>

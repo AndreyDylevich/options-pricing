@@ -9,10 +9,19 @@ import time
 from dataclasses import asdict, replace
 from datetime import date
 
-from app.pricing import binomial, black_scholes, implied_vol, monte_carlo, parity
+from app.pricing import (
+    binomial,
+    black_scholes,
+    implied_vol,
+    monte_carlo,
+    parity,
+    volatility,
+)
 from app.pricing.binomial import InvalidTreeParameters
 from app.pricing.models import (
     AmericanNotSupported,
+    ExerciseStyle,
+    Greeks,
     OptionParams,
     OptionType,
     PriceOutOfBounds,
@@ -21,15 +30,21 @@ from app.pricing.models import (
 )
 from app.pricing.monte_carlo import InvalidSimulationParameters
 from app.schemas.instruments import (
+    ContractQuote,
     OptionChain,
     OptionQuote,
     ParityReport,
     ParityRow,
+    VolatilityModelFit,
+    VolatilityOption,
+    VolatilityReport,
 )
 from app.schemas.pricing import (
     CompareRequest,
     CompareResponse,
     ConvergenceReport,
+    GreekCurve,
+    GreekProfiles,
     GreeksOut,
     ModelComparison,
     MonteCarloConvergencePoint,
@@ -550,3 +565,282 @@ def _parity_verdict(
         )
 
     return f"{share}. {comparison} — стоит разобраться"
+
+
+class ContractNotListed(Exception):
+    """На такой страйк контракта в цепочке нет.
+
+    В сообщении — ближайшие торгуемые страйки: страйк в форме можно
+    вписать любой, а биржа торгует только сетку с определённым шагом.
+    """
+
+
+def contract_quote(
+    ticker: str, expiry: str, strike: float, option_type: OptionType
+) -> ContractQuote:
+    """Рыночная цена конкретного контракта: bid, ask и середина.
+
+    Отдельным вызовом, а не частью расчёта цены: цепочка тянется из сети
+    сотни миллисекунд, и вшивать её в `POST /price` значило бы замедлить
+    каждое нажатие «Рассчитать» с десяти миллисекунд до сотен. Страница
+    спрашивает рыночную цену параллельно с расчётом.
+    """
+    snapshot = market_data.get_market_snapshot(ticker)
+
+    if expiry not in snapshot.expirations:
+        raise UnknownExpiry(expiry)
+
+    rows, _ = market_data.get_option_chain(ticker, expiry)
+    side = option_type.value
+
+    for row_side, row in rows:
+        if row_side != side or not math.isclose(float(row["strike"]), strike):
+            continue
+
+        bid, ask = float(row["bid"]), float(row["ask"])
+        return ContractQuote(
+            ticker=snapshot.ticker,
+            expiry=expiry,
+            strike=float(row["strike"]),
+            option_type=option_type,
+            bid=bid,
+            ask=ask,
+            mid=(bid + ask) / 2,
+            spread=ask - bid,
+            volume=_as_int(row.get("volume")),
+            open_interest=_as_int(row.get("openInterest")),
+        )
+
+    raise ContractNotListed(_nearest_strikes_message(rows, side, strike))
+
+
+# Сколько ближайших страйков назвать, когда точного нет. Три — чтобы
+# было видно и шаг сетки, и в какую сторону двигаться.
+NEAREST_STRIKES = 3
+
+
+def _nearest_strikes_message(
+    rows: list[tuple[str, dict]], side: str, strike: float
+) -> str:
+    """Подсказка на случай, когда контракта на такой страйк не нашлось."""
+    listed = sorted({float(row["strike"]) for row_side, row in rows if row_side == side})
+
+    if not listed:
+        return "по этой экспирации нет ни одного контракта с живыми котировками"
+
+    nearest = sorted(listed, key=lambda value: abs(value - strike))[:NEAREST_STRIKES]
+    return (
+        f"контракта на страйк {strike:g} нет, ближайшие торгуемые: "
+        + ", ".join(f"{value:g}" for value in sorted(nearest))
+    )
+
+
+# Точек на кривую. Сто двадцать у Блэка-Шоулза — это 11 мс на все три
+# профиля, можно не экономить. Дерево на порядок дороже, поэтому для
+# американского стиля точек вдвое меньше и шагов вдвое меньше обычных:
+# на глаз 200 шагов от 500 не отличить, а секунда ожидания от трёх —
+# отличается.
+PROFILE_POINTS = 120
+PROFILE_POINTS_AMERICAN = 60
+PROFILE_TREE_STEPS = 200
+
+# Разброс цены актива вокруг страйка и спота. Плюс-минус сорок процентов:
+# на этом промежутке дельта успевает дойти от нуля до единицы, а гамма —
+# показать и максимум, и оба спада.
+SPOT_SPAN = 0.4
+
+# Диапазон по времени. От суток, а не от нуля: в нуле тета у опциона на
+# деньгах уходит в бесконечность. До года — чтобы ускорение распада к
+# концу срока было видно целиком, а не только на своём участке.
+PROFILE_MIN_DAYS = 1
+PROFILE_MAX_DAYS = 365
+
+
+def greek_profiles(request: PriceRequest) -> GreekProfiles:
+    """Как греки ведут себя при большом сдвиге параметров, а не малом.
+
+    Модель выбирается по стилю исполнения, а не по тому, что выбрал
+    пользователь: для европейского Блэк-Шоулз даёт точное значение, к
+    которому дерево с Монте-Карло лишь сходятся, и считать кривую
+    приближённо было бы и медленнее, и хуже. Американский умеет только
+    дерево. Монте-Карло не годится вовсе: шестьдесят точек по двенадцать
+    симуляций — это десятки секунд, а кривые вышли бы дёрганые от
+    случайного шума.
+    """
+    if market_data.find_instrument(request.ticker) is None:
+        raise market_data.InstrumentNotFound(request.ticker)
+
+    days = (request.expiry - date.today()).days
+    params = _to_params(request, days)
+
+    american = params.exercise is ExerciseStyle.AMERICAN
+    model = PricingModel.BINOMIAL if american else PricingModel.BLACK_SCHOLES
+    points = PROFILE_POINTS_AMERICAN if american else PROFILE_POINTS
+
+    def greeks_at(other: OptionParams) -> Greeks | None:
+        try:
+            if american:
+                return binomial.calculate(other, steps=PROFILE_TREE_STEPS).greeks
+            return black_scholes.calculate(other).greeks
+        except (InvalidTreeParameters, PriceOutOfBounds, ValueError):
+            # Крайние точки развёртки иногда вырождаются — пропускаем их,
+            # а не роняем весь отчёт из-за одного края кривой.
+            return None
+
+    here = greeks_at(params)
+    if here is None:
+        raise ValueError("Не удалось посчитать греки в заданной точке")
+
+    spots = _spot_axis(params, points)
+    along_spot = [(value, greeks_at(replace(params, spot=value))) for value in spots]
+
+    terms = _days_axis(days, points)
+    along_time = [
+        (day, greeks_at(replace(params, time_to_expiry=day / DAYS_IN_YEAR)))
+        for day in terms
+    ]
+
+    return GreekProfiles(
+        model=model,
+        exercise=params.exercise,
+        strike=params.strike,
+        days_to_expiry=days,
+        delta_vs_spot=_curve(along_spot, "delta", params.spot, here.delta),
+        gamma_vs_spot=_curve(along_spot, "gamma", params.spot, here.gamma),
+        theta_vs_days=_curve(along_time, "theta", float(days), here.theta),
+    )
+
+
+def _spot_axis(params: OptionParams, points: int) -> list[float]:
+    """Сетка по цене актива, накрывающая и спот, и страйк.
+
+    Края считаются от обоих: если пользователь взял страйк далеко от
+    текущей цены, промежуток всё равно покажет оба, иначе точка «ты
+    здесь» оказалась бы за рамкой графика.
+    """
+    low = min(params.spot, params.strike) * (1 - SPOT_SPAN)
+    high = max(params.spot, params.strike) * (1 + SPOT_SPAN)
+    step = (high - low) / (points - 1)
+
+    return [low + step * index for index in range(points)]
+
+
+def _days_axis(days: int, points: int) -> list[float]:
+    """Сетка по сроку. Заканчивается не раньше собственного срока опциона."""
+    high = float(max(PROFILE_MAX_DAYS, days))
+    step = (high - PROFILE_MIN_DAYS) / (points - 1)
+
+    return [PROFILE_MIN_DAYS + step * index for index in range(points)]
+
+
+def _curve(
+    samples: list[tuple[float, Greeks | None]],
+    greek: str,
+    current_x: float,
+    current_y: float,
+) -> GreekCurve:
+    """Развёртку одного грека — в пару массивов для графика."""
+    usable = [(x, getattr(g, greek)) for x, g in samples if g is not None]
+
+    return GreekCurve(
+        x=[x for x, _ in usable],
+        y=[y for _, y in usable],
+        current_x=current_x,
+        current_y=current_y,
+    )
+
+
+# --- выбор волатильности --------------------------------------------
+
+# Окно исторической волатильности для таблицы — одно, годовое.
+#
+# Коротких окон здесь намеренно нет. Точность оценки σ падает как корень
+# из числа наблюдений: за год это ±1.1 процентного пункта, за месяц уже
+# ±2.6, за десять дней ±2.8 при самом значении 12%. Соседние короткие окна
+# на тех же данных давали 12.45% и 22.34% — это не «волатильность
+# изменилась», это нехватка наблюдений.
+#
+# Могло показаться, что разброс окон показывает направление движения
+# волатильности, но это уже есть в GARCH и точнее: направление видно в
+# переходе от прогноза на завтра к среднему по сроку, а долгосрочный
+# уровень — в самих коэффициентах. Три окна давали 20.47 / 29.14 / 24.57,
+# даже не монотонно.
+#
+# Тридцать и девяносто дней остаются в карточке рыночных данных: там это
+# факт о бумаге, а не вариант выбора для расчёта.
+HISTORY_WINDOWS = ((252, "год"),)
+
+
+def volatility_report(ticker: str, expiry: str) -> VolatilityReport:
+    """Способы оценить σ самостоятельно: историческая, GARCH, EGARCH.
+
+    Горизонт прогноза привязан к экспирации, а не взят круглым: цена
+    опциона зависит от накопленной дисперсии до его конца, и прогноз «на
+    завтра» дал бы систематически неверную цену.
+
+    Подразумеваемой волатильности здесь нет намеренно, хотя посчитать её
+    мы умеем. Подставив её в модель, получаешь рыночную цену обратно —
+    ровно до шестого знака, потому что из этой цены она и выведена.
+    В таблице, из которой выбирают σ для расчёта, такая строка
+    превращается в ловушку: человек видит совпадение с рынком до копейки и
+    решает, что проверил модель. Смотреть её нужно в цепочке опционов,
+    вместе с улыбкой, где видно, что одной σ вся цепочка не описывается.
+    """
+    snapshot = market_data.get_market_snapshot(ticker)
+
+    if expiry not in snapshot.expirations:
+        raise UnknownExpiry(expiry)
+
+    days = (date.fromisoformat(expiry) - date.today()).days
+    returns = market_data.get_log_returns(ticker)
+
+    options: list[VolatilityOption] = []
+    fits: list[VolatilityModelFit] = []
+    troubles: list[str] = []
+
+    for window, period_name in HISTORY_WINDOWS:
+        value = volatility.historical(returns, window)
+        if value is not None:
+            options.append(VolatilityOption(
+                key=f"hist{window}",
+                label=f"Историческая, {window} дн.",
+                sigma=value,
+                note=f"разброс дневных движений за {period_name}, все дни равноценны",
+            ))
+
+    for fit_model, note in (
+        (volatility.fit_garch,
+         "учитывает, что бурные дни идут сгустками; среднее по сроку опциона"),
+        (volatility.fit_egarch,
+         "то же плюс асимметрия: падения раскачивают сильнее подъёмов"),
+    ):
+        try:
+            fit = fit_model(returns, days)
+        except (volatility.NotEnoughHistory, ValueError) as error:
+            troubles.append(str(error))
+            continue
+
+        options.append(VolatilityOption(
+            key=fit.name.split("(")[0].lower(),
+            label=f"{fit.name}, прогноз на {days} дн.",
+            sigma=fit.term,
+            note=note,
+        ))
+        fits.append(VolatilityModelFit(
+            name=fit.name,
+            params=fit.params,
+            log_likelihood=fit.log_likelihood,
+            aic=fit.aic,
+            next_day=fit.next_day,
+            term=fit.term,
+        ))
+
+    return VolatilityReport(
+        ticker=snapshot.ticker,
+        expiry=expiry,
+        days_to_expiry=days,
+        observations=len(returns),
+        options=options,
+        fits=fits,
+        warning="; ".join(troubles) if troubles else None,
+    )

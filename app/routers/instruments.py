@@ -10,11 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import repository
 from app.db.session import get_session
+from app.pricing.models import OptionType
 from app.schemas.instruments import (
+    ContractQuote,
     Instrument,
     MarketSnapshot,
     OptionChain,
     ParityReport,
+    VolatilityReport,
 )
 from app.security import require_admin_token
 from app.services import market_data, pricing_service
@@ -115,6 +118,48 @@ async def get_chain(
 
 
 @router.get(
+    "/{ticker}/quote",
+    summary="Рыночная цена конкретного контракта",
+)
+async def get_quote(
+    ticker: str,
+    expiry: str = Query(description="Дата экспирации, YYYY-MM-DD"),
+    strike: float = Query(gt=0, description="Страйк"),
+    option_type: OptionType = Query(description="call или put"),
+) -> ContractQuote:
+    """За сколько этот опцион торгуется прямо сейчас.
+
+    Отдельно от расчёта цены намеренно: цепочка тянется из сети сотни
+    миллисекунд, а сам расчёт занимает единицы. Страница спрашивает то и
+    другое параллельно.
+    """
+    try:
+        # yfinance ходит в сеть синхронно.
+        return await run_in_threadpool(
+            pricing_service.contract_quote, ticker, expiry, strike, option_type
+        )
+    except market_data.InstrumentNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Инструмент {ticker} не найден в списке доступных",
+        ) from None
+    except pricing_service.UnknownExpiry:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"У {ticker} нет опционов с экспирацией {expiry}",
+        ) from None
+    except pricing_service.ContractNotListed as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
+        ) from None
+    except market_data.MarketDataUnavailable as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Источник рыночных данных недоступен ({error})",
+        ) from None
+
+
+@router.get(
     "/{ticker}/parity",
     summary="Сверка наших данных с рынком по паритету колла и пута",
 )
@@ -181,3 +226,40 @@ async def get_market(
             logger.exception("Не удалось сохранить рыночный снимок")
 
     return snapshot
+
+
+@router.get(
+    "/{ticker}/volatility",
+    summary="Все способы оценить волатильность для выбранного срока",
+)
+async def get_volatility(
+    ticker: str,
+    expiry: str = Query(description="Дата экспирации, YYYY-MM-DD"),
+) -> VolatilityReport:
+    """Историческая, GARCH, EGARCH и подразумеваемая — в одной таблице.
+
+    Горизонт прогноза привязан к экспирации: цена опциона зависит от
+    накопленной дисперсии до его конца, и прогноз на завтра дал бы
+    систематически неверную цену.
+    """
+    try:
+        # Пять лет истории из сети плюс две подгонки правдоподобием: и то
+        # и другое мимо event loop.
+        return await run_in_threadpool(
+            pricing_service.volatility_report, ticker, expiry
+        )
+    except market_data.InstrumentNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Инструмент {ticker} не найден в списке доступных",
+        ) from None
+    except pricing_service.UnknownExpiry:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"У {ticker} нет опционов с экспирацией {expiry}",
+        ) from None
+    except market_data.MarketDataUnavailable as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Источник рыночных данных недоступен ({error})",
+        ) from None
