@@ -40,7 +40,12 @@ class Instrument(Base):
     # Сколько страйков месячной цепочки имеют одновременно bid и ask.
     # Наличие опционов ещё не значит, что ими торгуют: у части бумаг
     # цепочка есть, а котировок в ней почти нет.
-    quoted_strikes: Mapped[int] = mapped_column(Integer, default=0)
+    #
+    # NULL значит «не измерено», и это не то же самое, что ноль. Пока биржа
+    # закрыта, Yahoo отдаёт нулевые bid и ask по всем страйкам подряд —
+    # записать это как «неликвид» нельзя, иначе список бумаг оказывался бы
+    # пустым каждую ночь и все выходные.
+    quoted_strikes: Mapped[int | None] = mapped_column(Integer)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

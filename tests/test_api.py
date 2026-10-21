@@ -798,3 +798,42 @@ def test_volatility_rejects_unknown_expiry(client: TestClient, monkeypatch) -> N
     assert client.get(
         "/api/instruments/KO/volatility?expiry=2030-01-18"
     ).status_code == 404
+
+
+def test_unmeasured_instruments_stay_in_the_list(
+    client: TestClient, monkeypatch, database
+) -> None:
+    # Бумага с неизмеренной ликвидностью остаётся в списке. Иначе ночью,
+    # когда Yahoo отдаёт нулевые котировки по всем страйкам, выпадающий
+    # список оказывался бы пустым и приложением нельзя было пользоваться.
+    from sqlalchemy import text
+
+    from app.schemas.instruments import Instrument
+    from app.services import market_data
+
+    async def seed(session):
+        await session.execute(text("""
+            insert into instruments (ticker, name, exchange, currency,
+                                     has_options, quoted_strikes, synced_at)
+            values ('NIGHT', 'Ночная', 'NYSE', 'USD', true, null, now()),
+                   ('THIN',  'Неликвид', 'NYSE', 'USD', true, 3, now())
+            on conflict (ticker) do update
+               set quoted_strikes = excluded.quoted_strikes
+        """))
+        await session.commit()
+
+    in_own_loop(seed, database)
+
+    from app.db import repository
+
+    async def listed(session):
+        return {i.ticker for i in await repository.list_instruments(session)}
+
+    tickers = in_own_loop(listed, database)
+
+    assert "NIGHT" in tickers, "неизмеренная бумага должна остаться в списке"
+    assert "THIN" not in tickers, "измеренный неликвид отсекается, как и раньше"
+
+    market_data.set_instruments([
+        Instrument(ticker="KO", name="Coca-Cola", exchange="NYSE", quoted_strikes=60)
+    ])

@@ -248,19 +248,118 @@ def test_screener_failure_is_wrapped(monkeypatch) -> None:
         market_data.fetch_screener_instruments()
 
 
-def test_liquidity_check_treats_errors_as_no_options(monkeypatch) -> None:
+def test_failed_liquidity_check_is_not_an_answer(monkeypatch) -> None:
+    # Сбой проверки обязан отличаться от ответа «опционов нет»: результат
+    # уходит в базу, и записать туда таймаут как факт нельзя — бумага
+    # выпала бы из списка насовсем. Проверено на живом запуске: Yahoo
+    # таймаутил, и все пятьдесят бумаг легли с has_options = false.
     class Broken:
         @property
         def options(self):
             raise RuntimeError("нет данных")
 
     monkeypatch.setattr(market_data.yf, "Ticker", lambda ticker: Broken())
-    assert market_data._option_liquidity("ANY") == (False, 0)
+    assert market_data._option_liquidity("ANY") is None
 
 
 def test_liquidity_zero_when_no_expirations(monkeypatch) -> None:
+    # А вот это настоящий ответ источника: цепочек нет. Его записывать можно.
     class Empty:
         options = ()
 
     monkeypatch.setattr(market_data.yf, "Ticker", lambda ticker: Empty())
     assert market_data._option_liquidity("ANY") == (False, 0)
+
+
+def test_unchecked_instruments_are_skipped(monkeypatch) -> None:
+    # Непроверенная бумага не попадает в выдачу вовсе, а не помечается
+    # «без опционов»: в базе останется прежнее значение, а не ложь.
+    quotes = [
+        {"symbol": "GOOD", "shortName": "Проверилась", "fullExchangeName": "NYSE",
+         "quoteType": "EQUITY", "currency": "USD"},
+        {"symbol": "TIMEOUT", "shortName": "Таймаут", "fullExchangeName": "NYSE",
+         "quoteType": "EQUITY", "currency": "USD"},
+    ]
+    monkeypatch.setattr(
+        market_data.yf, "screen", lambda name, count: {"quotes": quotes}
+    )
+    monkeypatch.setattr(
+        market_data, "_option_liquidity",
+        lambda ticker: None if ticker == "TIMEOUT" else (True, 60),
+    )
+
+    items = market_data.fetch_screener_instruments(count=5)
+
+    assert [item.ticker for item in items] == ["GOOD"]
+
+
+def test_closed_market_leaves_liquidity_unmeasured(monkeypatch) -> None:
+    # Пока биржа закрыта, Yahoo отдаёт нулевые bid и ask по всем страйкам
+    # подряд. Ноль котировок у каждой бумаги без исключения — сообщение о
+    # рынке, а не о бумагах: записать его как неликвид значит обнулить
+    # список каждую ночь и все выходные. Проверено живьём: в 02:23 по
+    # Нью-Йорку у AAPL 60 страйков в цепочке и ни одного с котировкой.
+    quotes = [
+        {"symbol": name, "shortName": name, "fullExchangeName": "NYSE",
+         "quoteType": "EQUITY", "currency": "USD"}
+        for name in ("AAPL", "MSFT", "KO")
+    ]
+    monkeypatch.setattr(
+        market_data.yf, "screen", lambda name, count: {"quotes": quotes}
+    )
+    # Остаточные котировки по единичным контрактам после закрытия: проверять
+    # «все нули» оказалось мало, в живом ночном замере у одиннадцати бумаг
+    # из сорока трёх нашлось от одного до девяти страйков.
+    leftovers = {"AAPL": 0, "MSFT": 9, "KO": 3}
+    monkeypatch.setattr(
+        market_data, "_option_liquidity", lambda t: (True, leftovers[t])
+    )
+
+    items = market_data.fetch_screener_instruments(count=5)
+
+    assert len(items) == 3
+    assert all(item.quoted_strikes is None for item in items), (
+        "максимум ниже порога — это закрытая биржа, а не измеренный неликвид"
+    )
+    assert all(item.has_options for item in items), (
+        "наличие цепочек измеряется надёжно и в нерабочие часы"
+    )
+
+
+def test_single_zero_is_real_illiquidity(monkeypatch) -> None:
+    # А вот если у одной бумаги ноль, а у других котировки есть — рынок
+    # открыт, и ноль у неё настоящий. Его записывать нужно.
+    quotes = [
+        {"symbol": name, "shortName": name, "fullExchangeName": "NYSE",
+         "quoteType": "EQUITY", "currency": "USD"}
+        for name in ("LIQUID", "DEAD")
+    ]
+    monkeypatch.setattr(
+        market_data.yf, "screen", lambda name, count: {"quotes": quotes}
+    )
+    monkeypatch.setattr(
+        market_data, "_option_liquidity",
+        lambda ticker: (True, 0) if ticker == "DEAD" else (True, 80),
+    )
+
+    by_ticker = {i.ticker: i for i in market_data.fetch_screener_instruments(count=5)}
+
+    assert by_ticker["LIQUID"].quoted_strikes == 80
+    assert by_ticker["DEAD"].quoted_strikes == 0
+
+
+def test_all_checks_failed_is_an_error(monkeypatch) -> None:
+    # Если не проверилась ни одна, молча вернуть пустой список нельзя:
+    # пользователь увидел бы «получено 0» и решил, что опционов нет ни у
+    # кого. Это отказ источника, и говорить надо о нём.
+    quotes = [
+        {"symbol": "ONE", "shortName": "Раз", "fullExchangeName": "NYSE",
+         "quoteType": "EQUITY", "currency": "USD"},
+    ]
+    monkeypatch.setattr(
+        market_data.yf, "screen", lambda name, count: {"quotes": quotes}
+    )
+    monkeypatch.setattr(market_data, "_option_liquidity", lambda ticker: None)
+
+    with pytest.raises(market_data.MarketDataUnavailable, match="ни по одной"):
+        market_data.fetch_screener_instruments(count=5)

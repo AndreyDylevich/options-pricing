@@ -4,7 +4,7 @@
 
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -91,7 +91,12 @@ async def list_instruments(session: AsyncSession) -> list[InstrumentSchema]:
         select(Instrument)
         .where(
             Instrument.has_options.is_(True),
-            Instrument.quoted_strikes >= settings.min_quoted_strikes,
+            # Неизмеренные пропускаем в список: лучше показать бумагу, по
+            # которой улыбку пока не построить, чем пустой список ночью.
+            or_(
+                Instrument.quoted_strikes.is_(None),
+                Instrument.quoted_strikes >= settings.min_quoted_strikes,
+            ),
         )
         .order_by(Instrument.ticker)
     )
@@ -238,6 +243,11 @@ async def sync_instruments(
         "illiquid": sum(
             1
             for item in items
-            if item.has_options and item.quoted_strikes < settings.min_quoted_strikes
+            if item.has_options
+            and item.quoted_strikes is not None
+            and item.quoted_strikes < settings.min_quoted_strikes
         ),
+        # Бумаги, по которым ликвидность замерить не вышло: биржа была
+        # закрыта. Они в списке остаются, но улыбку по ним пока не построить.
+        "unmeasured": sum(1 for item in items if item.quoted_strikes is None),
     }

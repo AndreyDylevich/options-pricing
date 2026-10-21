@@ -120,7 +120,16 @@ async def _bootstrap_instruments() -> None:
             await repository.sync_instruments(session, items)
             market_data.set_instruments(await repository.list_instruments(session))
 
-        logger.info("Справочник наполнен: %d бумаг", len(market_data.list_instruments()))
+        available = len(market_data.list_instruments())
+        if available:
+            logger.info("Справочник наполнен: %d бумаг", available)
+        else:
+            # Ноль после успешного запроса — не успех: скринер ответил, но
+            # ни одна бумага не прошла порог ликвидности.
+            logger.warning(
+                "Справочник пуст: ни одна бумага не прошла порог "
+                "ликвидности MIN_QUOTED_STRIKES"
+            )
     except asyncio.CancelledError:
         raise
     except Exception:

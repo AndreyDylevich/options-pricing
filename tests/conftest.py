@@ -74,13 +74,17 @@ async def _prepare_test_database(url: str) -> None:
     engine = create_async_engine(url)
     try:
         async with engine.begin() as connection:
+            # Пересоздаём, а не только создаём отсутствующее: create_all не
+            # меняет уже существующие таблицы, и после правки схемы тестовая
+            # база молча оставалась бы прежней. Один раз так и вышло —
+            # quoted_strikes стал обнуляемым в моделях, а в тестовой базе
+            # сохранил NOT NULL, и тест упал на вставке NULL.
+            #
+            # Заодно это и есть очистка перед прогоном. Перед, а не после:
+            # если тест упал, содержимое таблиц остаётся под рукой для
+            # разбора до следующего запуска.
+            await connection.run_sync(Base.metadata.drop_all)
             await connection.run_sync(Base.metadata.create_all)
-
-            # Чистим перед прогоном, а не после: если тест упал, содержимое
-            # таблиц остаётся под рукой для разбора. CASCADE нужен из-за
-            # внешнего ключа market_snapshots на instruments.
-            tables = ", ".join(Base.metadata.tables)
-            await connection.execute(text(f"truncate {tables} restart identity cascade"))
     finally:
         await engine.dispose()
 

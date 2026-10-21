@@ -3,6 +3,7 @@
 скринера. Единственный модуль, знающий про источник данных и pandas.
 """
 
+import logging
 import math
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
@@ -15,6 +16,8 @@ import yfinance as yf
 from app.config import settings
 from app.schemas.instruments import DividendPayment, Instrument, MarketSnapshot
 from app.services.cache import TTLCache
+
+logger = logging.getLogger(__name__)
 
 # Торговых дней в году: множитель для перевода дневной волатильности в
 # годовую. Календарные 365 здесь не годятся — цена не меняется в выходные.
@@ -161,22 +164,76 @@ def fetch_screener_instruments(
     with ThreadPoolExecutor(max_workers=OPTION_CHECK_WORKERS) as pool:
         measured = pool.map(_option_liquidity, (item.ticker for item in candidates))
 
-    return [
-        item.model_copy(
-            update={"has_options": has_options, "quoted_strikes": quoted}
-        )
-        for item, (has_options, quoted) in zip(candidates, measured, strict=True)
+    results = [
+        (item, result)
+        for item, result in zip(candidates, measured, strict=True)
+        if result is not None
     ]
+
+    # Пока биржа закрыта, Yahoo отдаёт нулевые или почти нулевые bid и ask:
+    # остаются лишь остаточные котировки по единичным контрактам. Записать
+    # это как неликвид нельзя — список бумаг оказывался бы пустым каждую
+    # ночь и все выходные.
+    #
+    # Признак — максимум ниже порога. Скринер отдаёт самые активные бумаги
+    # дня, и в торговые часы такого не бывает: замер в 16:40 по Нью-Йорку
+    # дал максимум 376 страйков, замер в 02:23 — девять.
+    #
+    # Проверять «все нули» оказалось мало: в том же ночном замере у
+    # одиннадцати бумаг из сорока трёх нашлось от одного до девяти
+    # котируемых страйков, и условие не срабатывало.
+    measured = [quoted for _, (has, quoted) in results if has]
+    not_measurable = bool(measured) and max(measured) < settings.min_quoted_strikes
+
+    if not_measurable:
+        logger.info(
+            "Лучшая из %d бумаг имеет %d котируемых страйков при пороге %d — "
+            "похоже, биржа закрыта; ликвидность не записываем",
+            len(measured), max(measured), settings.min_quoted_strikes,
+        )
+
+    checked = [
+        item.model_copy(
+            update={
+                "has_options": has_options,
+                "quoted_strikes": None if not_measurable else quoted,
+            }
+        )
+        for item, (has_options, quoted) in results
+    ]
+
+    # Непроверенные бумаги не возвращаем вовсе, а не помечаем «опционов
+    # нет». Иначе временный таймаут записался бы в базу как факт, и бумага
+    # выпала бы из списка насовсем — до случайно удачной синхронизации.
+    # Проверено на чистом запуске: Yahoo таймаутил, и все пятьдесят бумаг
+    # легли в базу с has_options = false, после чего список остался пустым.
+    skipped = len(candidates) - len(checked)
+    if skipped:
+        logger.warning(
+            "Опционы не удалось проверить по %d бумагам из %d — они пропущены",
+            skipped, len(candidates),
+        )
+
+    if candidates and not checked:
+        raise MarketDataUnavailable(
+            f"скринер ответил, но проверить опционы не удалось ни по одной из "
+            f"{len(candidates)} бумаг"
+        )
+
+    return checked
 
 
 # Есть ли опционы и сколько страйков реально котируется. Наличие цепочки ещё
 # ничего не значит: у части бумаг она есть, но bid и ask пустые почти везде.
-# Это станет важно, когда по рыночным ценам начнём считать implied
-# volatility — разворачивать нечего, если цены нет. Мерим по сроку примерно
-# через месяц: ближние недели слишком узкие, дальние всегда полупустые.
-# Ошибку считаем за отсутствие опционов: бумага без данных нам не нужна
-# независимо от причины.
-def _option_liquidity(ticker: str) -> tuple[bool, int]:
+# Разворачивать подразумеваемую волатильность нечего, если цены нет. Мерим по
+# сроку примерно через месяц: ближние недели слишком узкие, дальние всегда
+# полупустые.
+#
+# None означает «проверить не удалось» и отличается от (False, 0), то есть
+# «проверили, опционов нет». Разница принципиальна: ответ источника мы
+# сохраняем в базу, и записать туда сбой сети как факт нельзя — бумага
+# выпала бы из списка насовсем. То же правило, что с отменённым дивидендом.
+def _option_liquidity(ticker: str) -> tuple[bool, int] | None:
     try:
         yf_ticker = yf.Ticker(ticker)
         expirations = yf_ticker.options
@@ -192,7 +249,7 @@ def _option_liquidity(ticker: str) -> tuple[bool, int]:
         )
         return True, quoted
     except Exception:
-        return False, 0
+        return None
 
 
 # Свежий ответ живёт MARKET_CACHE_TTL_MINUTES минут. Если срок вышел, а

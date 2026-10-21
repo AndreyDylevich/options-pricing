@@ -21,9 +21,10 @@ class Instrument(BaseModel):
         default=True,
         description="Есть ли по бумаге торгуемые опционы — иначе считать нечего",
     )
-    quoted_strikes: int = Field(
-        default=0,
-        description="Страйков месячной цепочки с живыми котировками",
+    quoted_strikes: int | None = Field(
+        default=None,
+        description="Страйков месячной цепочки с живыми котировками; "
+        "null — не измерено, биржа была закрыта",
     )
 
 
