@@ -47,22 +47,24 @@ numbers you feed it are right. This project separates those two questions:
 
 ## Tech stack
 
-### Backend
+**Frontend**
+
+- Vanilla JavaScript, no build step
+- Plotly (vendored, so the page works offline)
+- CSS grid — two-column terminal dashboard with tabs
+- A command line that drives the same endpoints as the form
+
+**Backend**
 
 - Python 3.12
 - FastAPI
-- PostgreSQL, SQLAlchemy 2.0 (async), Alembic
+- PostgreSQL
+- SQLAlchemy 2.0 (async) + Alembic
 - NumPy, SciPy
 - arch (GARCH, EGARCH)
-- slowapi
+- slowapi (rate limiting)
 
-### Frontend
-
-- Vanilla JavaScript, no build step
-- Plotly, vendored so the page works offline
-- CSS grid: two-column dashboard with tabs
-
-### External data
+**External APIs**
 
 - Yahoo Finance via yfinance — prices, dividends, option chains, risk-free rate
 
