@@ -1081,6 +1081,13 @@ function renderChain(chain) {
     body.append(row);
   }
 
+  // Ни одной живой котировки при непустой цепочке — это закрытая биржа, а
+  // не поломка. Без объяснения «котировок 0» выглядит как ошибка проекта.
+  if (chain.quoted === 0 && chain.skipped > 0) {
+    setStatus(chainNote, MARKET_CLOSED);
+    return;
+  }
+
   setStatus(chainNote,
     `${chain.expiry} · T = ${chain.days_to_expiry} дн. · `
     + `S = ${chain.spot.toFixed(2)}, форвард ${chain.forward.toFixed(2)} · `
@@ -1109,6 +1116,11 @@ const CHART_COLORS = {
   text: "#ffffff",
   muted: "#c3c2b7",
 };
+
+// Одно объяснение на все места, где нужны живые котировки: цепочка,
+// улыбка, сверка с рынком и рыночная цена контракта.
+const MARKET_CLOSED =
+  "Биржа закрыта: вне торговых часов Yahoo отдаёт нулевые bid и ask по всем страйкам, и считать по ним нечего. Американский рынок работает с 16:30 до 23:00 по Москве.";
 
 const CHART_FONT = '-apple-system, system-ui, "Segoe UI", sans-serif';
 
