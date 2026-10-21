@@ -1,259 +1,266 @@
 # CLAUDE.md
 
-Расчёт цены опциона на акцию тремя моделями с греками, рыночные данные с
-Yahoo. Бэкенд на FastAPI, PostgreSQL, страница на ванильном JS.
+Prices an equity option with three models and their greeks, market data from
+Yahoo. FastAPI backend, PostgreSQL, a page built in vanilla JS.
 
 ## Commands
 
 ```bash
 source .venv/bin/activate
 
-# Сервер разработки
+# Development server
 uvicorn app.main:app --reload          # http://127.0.0.1:8000, /docs — Swagger
 
-# Схема базы
-alembic upgrade head                                 # накатить
-alembic revision --autogenerate -m "что поменяли"    # после правки app/db/entities.py
+# Database schema
+alembic upgrade head                                 # apply
+alembic revision --autogenerate -m "what changed"    # after editing app/db/entities.py
 alembic downgrade -1
 alembic current
 
-# Всё разом в контейнерах
-docker compose up                       # приложение + PostgreSQL
-docker compose down -v                  # остановить и стереть данные
+# Everything at once, in containers
+docker compose up                       # app + PostgreSQL
+docker compose down -v                  # stop and wipe the data
 
-# Замена справочника бумаг целиком (не эндпоинт, только из командной строки)
+# Replacing the instrument table outright (not an endpoint, command line only)
 python -m scripts.sync_instruments --replace
 ```
 
-База создаётся один раз вручную: `psql -U postgres -h localhost -d postgres
--f sql/00_init_db.sql`. Строка подключения берётся из `.env`, в
-`alembic.ini` поле `sqlalchemy.url` намеренно пустое — его подставляет
-`alembic/env.py` из настроек.
+The database is created by hand, once: `psql -U postgres -h localhost -d
+postgres -f sql/00_init_db.sql`. The connection string comes from `.env`; in
+`alembic.ini` the `sqlalchemy.url` field is deliberately empty — `alembic/env.py`
+fills it in from the settings.
 
 ## Environment Variables
 
-`.env` в корне, образец — `.env.example`. В контейнерах значения заданы в
-`compose.yml`.
+`.env` in the root, `.env.example` as the template. In containers the values
+are set in `compose.yml`.
 
-- `DATABASE_URL` — строка подключения к PostgreSQL, обязательна
-- `MARKET_CACHE_TTL_MINUTES` — сколько минут считать рыночные данные свежими (15)
-- `CALCULATION_RETENTION_DAYS` — сколько дней хранить историю расчётов (3)
-- `MIN_QUOTED_STRIKES` — порог ликвидности для попадания бумаги в список (20)
-- `DEFAULT_RISK_FREE_RATE` — запасная ставка, если `^IRX` недоступен (0.042)
-- `RATE_LIMIT` — частота запросов с адреса на всё (120/minute)
-- `PRICING_RATE_LIMIT` — отдельно на расчётные эндпоинты (30/minute)
-- `MAX_CONCURRENT_PRICING` — одновременных расчётов, потолок памяти (4)
-- `ADMIN_TOKEN` — токен для `POST /sync`; пустой означает «сгенерировать при старте»
+- `DATABASE_URL` — PostgreSQL connection string, required
+- `MARKET_CACHE_TTL_MINUTES` — how many minutes market data counts as fresh (15)
+- `CALCULATION_RETENTION_DAYS` — how many days calculation history is kept (3)
+- `MIN_QUOTED_STRIKES` — liquidity floor for an instrument to make the list (20)
+- `DEFAULT_RISK_FREE_RATE` — fallback rate when `^IRX` is unavailable (0.042)
+- `RATE_LIMIT` — requests per address, everything (120/minute)
+- `PRICING_RATE_LIMIT` — pricing endpoints separately (30/minute)
+- `MAX_CONCURRENT_PRICING` — simultaneous calculations, the memory ceiling (4)
+- `ADMIN_TOKEN` — token for `POST /sync`; empty means "generate one at startup"
 
 ## Architecture
 
-Поток одного расчёта: `static/app.js` → `routers/pricing.py` →
-`services/pricing_service.py` → `pricing/<модель>.py` → ответ пишется через
-`db/repository.py`.
+The path of one calculation: `static/app.js` → `routers/pricing.py` →
+`services/pricing_service.py` → `pricing/<model>.py` → the answer is written
+back through `db/repository.py`.
 
-**Слои разделены жёстко, и это главное ограничение проекта.**
+**The layers are separated strictly, and that is the project's main constraint.**
 
 ### Pricing (`app/pricing/`)
 
-Чистая математика. Импортирует numpy, scipy и `arch` — ни FastAPI, ни БД,
-ни yfinance. Отлаживается из консоли отдельно от браузера.
+Pure math. Imports numpy, scipy and `arch` — no FastAPI, no database, no
+yfinance. Debugs from a console, away from the browser.
 
-- `models.py` — контракт всех моделей: `OptionParams` на вход,
-  `PricingResult` на выход. `OptionType`, `ExerciseStyle`, `PricingModel`,
-  исключения `AmericanNotSupported` и `PriceOutOfBounds`. Пределы здравого
-  смысла: `MAX_SIGMA = 5.0`, `MAX_RATE = 1.0`, `MIN_RATE = -0.5`,
+- `models.py` — the contract every model obeys: `OptionParams` in,
+  `PricingResult` out. `OptionType`, `ExerciseStyle`, `PricingModel`, and the
+  `AmericanNotSupported` and `PriceOutOfBounds` exceptions. Sanity limits:
+  `MAX_SIGMA = 5.0`, `MAX_RATE = 1.0`, `MIN_RATE = -0.5`,
   `MAX_DIV_YIELD = 5.0`
-- `black_scholes.py` — `calculate`, `price`, `greeks`; аналитические
-  производные, без пересчёта цены. Эталон для двух остальных моделей
-- `binomial.py` — дерево CRR, `DEFAULT_STEPS = 500`, предел 5000. Delta,
-  gamma и theta снимаются с первых трёх слоёв, vega и rho численно.
-  Единственная модель с американским стилем
-- `monte_carlo.py` — GBM по финальной цене, антитетические пары,
-  `DEFAULT_PATHS = 100 000`, предел 5 млн, `SEED = 20240814`. Отдельная
-  `estimate()` для графика сходимости — без греков, в двенадцать раз дешевле
-- `numeric_greeks.py` — центральные разности с прижатием к границам
-  допустимых значений. Используют дерево, Монте-Карло и тесты
-- `bounds.py` — границы отсутствия арбитража. `require_within_bounds`
-  бросает исключение, `violation` только сообщает (для Монте-Карло)
-- `implied_vol.py` — `solve()` методом Брента из scipy, четыре внятные
-  причины отказа вместо одного «решения нет»
-- `parity.py` — паритет колла и пута: `check`, `consensus_forward`,
-  `implied_forward`, `implied_div_yield`. Границы для американского стиля
-  считаются по исполнимым ценам, а не по серединам
-- `volatility.py` — `fit_garch`, `fit_egarch` через библиотеку `arch`,
-  `historical`. В цену идёт `term` (средняя по сроку), а не `next_day`
+- `black_scholes.py` — `calculate`, `price`, `greeks`; analytic derivatives,
+  with no repricing. The reference the other two models are measured against
+- `binomial.py` — a CRR tree, `DEFAULT_STEPS = 500`, capped at 5000. Delta,
+  gamma and theta are read off the first three layers, vega and rho
+  numerically. The only model that handles the American style
+- `monte_carlo.py` — GBM on the terminal price, antithetic pairs,
+  `DEFAULT_PATHS = 100 000`, capped at 5 million, `SEED = 20240814`. A separate
+  `estimate()` for the convergence chart — no greeks, twelve times cheaper
+- `numeric_greeks.py` — central differences, clamped to the edges of the
+  admissible range. Used by the tree, by Monte Carlo and by the tests
+- `bounds.py` — no-arbitrage bounds. `require_within_bounds` raises,
+  `violation` only reports (for Monte Carlo)
+- `implied_vol.py` — `solve()` by Brent's method from scipy, with four
+  intelligible reasons for failure instead of one "no solution"
+- `parity.py` — put-call parity: `check`, `consensus_forward`,
+  `implied_forward`, `implied_div_yield`. For the American style the bounds are
+  computed on executable prices, not on mids
+- `volatility.py` — `fit_garch`, `fit_egarch` through the `arch` library, and
+  `historical`. What goes into a price is `term` (the average over the term),
+  not `next_day`
 
 ### Services (`app/services/`)
 
-- `market_data.py` — **единственное место, где живут `yfinance` и
-  `pandas`**. DataFrame за границы модуля не выходит. `get_market_snapshot`,
+- `market_data.py` — **the only place where `yfinance` and `pandas` live**. No
+  DataFrame crosses the module boundary. `get_market_snapshot`,
   `get_option_chain`, `get_log_returns`, `fetch_screener_instruments`,
-  `effective_div_yield`, реестр бумаг в памяти (`set_instruments`,
-  `prime_cache`). Смена провайдера данных должна затрагивать только этот файл
-- `pricing_service.py` — **единственная точка, где встречаются HTTP-схемы и
-  математика**: считает T, собирает `OptionParams`, диспатчит по
-  `PricingModel`. `calculate`, `compare`, `convergence`, `greek_profiles`,
-  `option_chain`, `contract_quote`, `parity_report`, `volatility_report`
-- `cache.py` — `TTLCache` с часами, которыми управляет вызывающий.
-  Просроченная запись не удаляется: при сбое источника её отдают с пометкой
+  `effective_div_yield`, plus the in-memory instrument registry
+  (`set_instruments`, `prime_cache`). Changing the data provider must touch
+  this file and no other
+- `pricing_service.py` — **the only point where HTTP schemas and the math
+  meet**: computes T, assembles `OptionParams`, dispatches on `PricingModel`.
+  `calculate`, `compare`, `convergence`, `greek_profiles`, `option_chain`,
+  `contract_quote`, `parity_report`, `volatility_report`
+- `cache.py` — a `TTLCache` whose clock the caller owns. An expired entry is
+  not dropped: if the source fails it is served with a note
 
 ### Core (`app/`)
 
-- `main.py` — сборка приложения. `lifespan` поднимает реестр и кэш из базы,
-  заводит две фоновые задачи: `_purge_calculations_forever` (чистка истории
-  раз в час) и `_bootstrap_instruments` (наполнение пустого справочника).
-  `index` отдаёт страницу строкой, подставляя токен в мета-тег.
-  `validation_handler` склеивает ошибки Pydantic в одну русскую фразу
-- `config.py` — `Settings` на pydantic-settings, читает `.env`
-- `limits.py` — `limiter` (slowapi) и `pricing_slot()` — семафор по
-  событийному циклу
-- `security.py` — `require_admin_token`, зависимость FastAPI; сравнение
-  через `compare_digest`
-- `db/entities.py` — три таблицы, `db/repository.py` — запросы,
-  `db/session.py` — движок и фабрика сессий
+- `main.py` — assembles the application. `lifespan` restores the registry and
+  the cache from the database and starts two background tasks:
+  `_purge_calculations_forever` (history cleanup, hourly) and
+  `_bootstrap_instruments` (filling an empty instrument table). `index` serves
+  the page as a string, substituting the token into a meta tag.
+  `validation_handler` joins Pydantic's errors into a single Russian sentence
+- `config.py` — `Settings` on pydantic-settings, reads `.env`
+- `limits.py` — `limiter` (slowapi) and `pricing_slot()`, a per-event-loop
+  semaphore
+- `security.py` — `require_admin_token`, a FastAPI dependency; comparison
+  through `compare_digest`
+- `db/entities.py` — three tables, `db/repository.py` — the queries,
+  `db/session.py` — the engine and the session factory
 
 ### Routers (`app/routers/`)
 
-| Эндпоинт | Назначение |
+| Endpoint | Purpose |
 |---|---|
-| `POST /api/price` | цена и греки одной моделью, пишет в историю |
-| `POST /api/price/compare` | три модели на одних данных; отказ одной — строка таблицы, а не ошибка |
-| `POST /api/price/convergence` | 48 построений дерева и 10 симуляций; в историю не пишет |
-| `POST /api/price/profiles` | профили delta и gamma по цене, theta по сроку |
-| `GET /api/instruments` | список бумаг из реестра в памяти |
-| `POST /api/instruments/sync` | дополнить справочник из скринера; **нужен `X-Admin-Token`** |
-| `GET /api/instruments/{t}/market` | снимок: спот, волатильности, дивиденды, ставка, экспирации |
-| `GET /api/instruments/{t}/volatility` | историческая, GARCH, EGARCH под срок опциона |
-| `GET /api/instruments/{t}/chain` | цепочка с подразумеваемой волатильностью |
-| `GET /api/instruments/{t}/quote` | рыночная цена одного контракта |
-| `GET /api/instruments/{t}/parity` | сверка спота, ставки и дивидендов с рынком |
-| `GET /api/health` | проверка живости |
+| `POST /api/price` | price and greeks from one model, written to history |
+| `POST /api/price/compare` | three models on the same inputs; one failing is a table row, not an error |
+| `POST /api/price/convergence` | 48 tree builds and 10 simulations; not written to history |
+| `POST /api/price/profiles` | delta and gamma against spot, theta against time |
+| `GET /api/instruments` | the instrument list, from the in-memory registry |
+| `POST /api/instruments/sync` | extend the table from the screener; **needs `X-Admin-Token`** |
+| `GET /api/instruments/{t}/market` | a snapshot: spot, volatilities, dividends, rate, expiries |
+| `GET /api/instruments/{t}/volatility` | historical, GARCH, EGARCH over the option's term |
+| `GET /api/instruments/{t}/chain` | the chain with implied volatility |
+| `GET /api/instruments/{t}/quote` | the market price of one contract |
+| `GET /api/instruments/{t}/parity` | reconciling spot, rate and dividends against the market |
+| `GET /api/health` | liveness check |
 
-Текст для Swagger задаётся параметрами `summary=` и `description=` у
-маршрута, а не докстрокой функции.
+The text Swagger shows comes from the route's `summary=` and `description=`
+parameters, not from the function's docstring.
 
 ### Frontend (`app/static/`)
 
-Ванильный JS, четыре файла плюс `vendor/plotly-basic.min.js`.
+Vanilla JS, four files plus `vendor/plotly-basic.min.js`.
 
-- `index.html` — две колонки: слева ввод (липкая), справа результат и пять
-  закладок
-- `app.js` — загрузка данных, расчёт, отрисовка всех графиков через
-  `Plotly.newPlot`, переключатель закладок `showTab`
-- `command.js` — командная строка. Загружается после `app.js` и вызывает
-  его функции напрямую; **своих запросов к API не делает** — заполняет те же
-  поля и нажимает те же кнопки, что и мышь
-- `style.css` — тёмная терминальная тема
+- `index.html` — two columns: inputs on the left (sticky), the result and five
+  tabs on the right
+- `app.js` — loading data, running the calculation, drawing every chart through
+  `Plotly.newPlot`, and `showTab`, the tab switcher
+- `command.js` — the command line. Loaded after `app.js` and calls its
+  functions directly; **it makes no API requests of its own** — it fills in the
+  same fields and presses the same buttons as the mouse
+- `style.css` — the dark terminal theme
 
 ## Database Tables
 
-- `instruments` — `ticker` (первичный ключ), `name`, `exchange`, `currency`,
+- `instruments` — `ticker` (primary key), `name`, `exchange`, `currency`,
   `has_options`, `quoted_strikes`, `created_at`, `synced_at`
-- `market_snapshots` — `id`, `ticker` (FK с `ON DELETE CASCADE`),
+- `market_snapshots` — `id`, `ticker` (FK with `ON DELETE CASCADE`),
   `fetched_at`, `as_of`, `spot`, `sigma_30d`, `sigma_90d`, `sigma_252d`,
   `div_yield`, `risk_free_rate`, `expirations` (JSONB), `div_schedule` (JSONB)
-- `calculations` — `id`, `created_at`, параметры запроса, `price`, пять
-  греков отдельными колонками, `std_error`, `ci95_low`, `ci95_high`,
+- `calculations` — `id`, `created_at`, the request parameters, `price`, the five
+  greeks in columns of their own, `std_error`, `ci95_low`, `ci95_high`,
   `model_params` (JSONB), `elapsed_ms`
 
-Греки лежат отдельными колонками, а не одним JSON: по ним нужно сортировать
-и строить графики. В JSONB уходит только то, у чего нет общего набора полей:
-`steps` у дерева, `paths` у Монте-Карло.
+The greeks sit in separate columns rather than in one JSON: they have to be
+sorted on and charted. JSONB takes only what has no common set of fields:
+`steps` for the tree, `paths` for Monte Carlo.
 
-## Соглашения, которые легко нарушить
+## Conventions that are easy to break
 
-- **Ставки и волатильность везде — доли единицы** (0.0412, не 4.12). Перевод
-  из процентов делает фронт
-- **252 против 365 — разница намеренная.** Волатильность приводится к году
-  через торговые дни, срок и дисконтирование — через календарные. Деньги
-  дисконтируются каждый день, цена в выходные не меняется
-- **Греки в терминальных единицах:** vega и rho на процентный пункт, theta
-  на календарный день. Пересчёт делает каждая модель у себя
-- **T считает сервер** из даты экспирации: браузер может стоять в другом
-  часовом поясе
-- **Валидация продублирована** в `schemas/pricing.py` и в
-  `OptionParams.__post_init__` — не по недосмотру: схема объясняет опечатку
-  на границе HTTP, датакласс защищает библиотеку, которую зовут мимо API
-- **`GET /{ticker}/market` — обычный `def`, не `async`**: yfinance ходит в
-  сеть синхронно. `POST /price` наоборот `async`, но расчёт уходит в
-  `run_in_threadpool`
-- **Ошибка записи в историю не отнимает посчитанную цену**: логируется,
-  ответ уходит с `calculation_id = null`
-- **`history(auto_adjust=True)`** принципиален: без него сплиты и дивидендные
-  отсечки завышают историческую волатильность
+- **Rates and volatilities are fractions of 1 everywhere** (0.0412, not 4.12).
+  The conversion from percent is the frontend's job
+- **252 against 365 is a deliberate difference.** Volatility is annualized
+  through trading days; the term and the discounting through calendar days.
+  Money is discounted every day, and a price does not move over a weekend
+- **Greeks come back in terminal units:** vega and rho per percentage point,
+  theta per calendar day. Each model does that conversion itself
+- **The server computes T** from the expiry date: the browser may sit in
+  another time zone
+- **Validation is duplicated** in `schemas/pricing.py` and in
+  `OptionParams.__post_init__` — not by oversight: the schema explains a typo
+  at the HTTP boundary, the dataclass protects a library that can be called
+  past the API
+- **`GET /{ticker}/market` is a plain `def`, not `async`**: yfinance goes to
+  the network synchronously. `POST /price` is `async`, but the calculation
+  itself goes into `run_in_threadpool`
+- **A failure to write history must not cost a computed price**: it is logged
+  and the answer goes out with `calculation_id = null`
+- **`history(auto_adjust=True)`** matters: without it splits and ex-dividend
+  dates inflate historical volatility
 
-### Данные и источник
+### Data and the source
 
-- **Закрытая биржа определяется по максимуму ниже порога.** Yahoo вне
-  торговых часов отдаёт нулевые bid и ask; проверять «все нули» мало — в
-  ночном замере у одиннадцати бумаг из сорока трёх нашлось от одного до
-  девяти страйков. Днём максимум был 376, ночью девять
-- **`div_yield` — не трейлинговая доходность.** Считается под конкретную
-  экспирацию по датам отсечек: до ближайшей ноль, внутрь срока попала —
-  скачок. Поле `div_yield` в снимке осталось справочным, расчёт берёт
-  `div_yield_by_expiry[expiry]`
-- **В базе хранится график выплат `div_schedule`, а не готовое q.** q зависит
-  от сегодняшней даты и назавтра неверно, поэтому пересчитывается в
-  `market_data.prime_cache` при каждом подъёме кэша
-- **Ни одного тикера в коде не зашито.** Список приходит из скринера Yahoo;
-  на пустой базе `main.py` тянет его сам, фоновой задачей
-- **Наполнение справочника не блокирует старт.** Раньше его дожидались до
-  `yield` в lifespan, и при таймаутах Yahoo uvicorn не принимал запросы
-  вовсе — ни страница, ни `/api/health` не отвечали минутами
+- **A closed exchange is detected by the maximum falling below the floor.**
+  Outside trading hours Yahoo returns zero bid and ask; checking for "all
+  zeros" is not enough — in a night measurement eleven instruments out of
+  forty-three still had between one and nine strikes. By day the maximum was
+  376, by night nine
+- **`div_yield` is not the trailing yield.** It is computed for one specific
+  expiry from the ex-dates: zero before the next one, a jump once one falls
+  inside the term. The `div_yield` field in a snapshot stayed on for reference;
+  the calculation takes `div_yield_by_expiry[expiry]`
+- **The database stores the payment schedule `div_schedule`, not a ready q.** q
+  depends on today's date and is wrong tomorrow, so it is recomputed in
+  `market_data.prime_cache` every time the cache is raised
+- **Not a single ticker is hard-coded.** The list comes from the Yahoo
+  screener; on an empty database `main.py` fetches it itself, in a background
+  task
+- **Filling the instrument table does not block startup.** It used to be
+  awaited before the `yield` in lifespan, and when Yahoo timed out uvicorn
+  accepted no requests at all — neither the page nor `/api/health` answered for
+  minutes
 
-### Модели и расчёт
+### Models and the calculation
 
-- **Профили греков считаются моделью по стилю, а не выбранной
-  пользователем.** Для европейского — Блэк-Шоулз (точное значение), для
-  американского — дерево на 200 шагах и 60 точках. Монте-Карло не годится:
-  шестьдесят точек по двенадцать симуляций это десятки секунд и дёрганая
-  кривая
-- **Веги по волатильности графиком нет намеренно.** У опциона на деньгах
-  вега от σ почти не зависит: 0.379 при 10% против 0.388 при 80%. Вышла бы
-  горизонтальная прямая
-- **Рыночная цена контракта — отдельный эндпоинт, не часть `/price`.**
-  Цепочка тянется 360 мс, расчёт — единицы миллисекунд; страница
-  спрашивает параллельно. Цена последней сделки не показывается
-- **Паритет считается по bid/ask, не по последней сделке.** Границы выхода
-  зависят от нашего спота, а форвард — нет; отбраковывать форвард по этим
-  границам нельзя, иначе при съехавшем споте пропадает ровно то число, по
-  которому сдвиг и виден
-- **Согласие в сверке решается по форварду, а не по q.** q — ставка годовая,
-  и на месячном сроке тот же сдвиг форварда даёт в двенадцать раз большее
-  расхождение q
+- **Greek profiles are computed by the model the style implies, not the one the
+  user picked.** For the European style, Black-Scholes (the exact value); for
+  the American, a tree on 200 steps and 60 points. Monte Carlo will not do:
+  sixty points times twelve simulations is tens of seconds, and the curve would
+  come out ragged
+- **There is deliberately no chart of vega against volatility.** For an
+  at-the-money option vega barely depends on σ: 0.379 at 10% against 0.388 at
+  80%. It would come out a horizontal line
+- **The market price of a contract is a separate endpoint, not part of
+  `/price`.** The chain takes 360 ms to fetch, the calculation single
+  milliseconds; the page asks for both in parallel. The last trade price is not
+  shown
+- **Parity is computed on bid/ask, not on the last trade.** The breach bounds
+  depend on our spot, the forward does not; the forward must not be rejected by
+  those bounds, or a drifted spot throws away exactly the number that reveals
+  the drift
+- **Agreement in the reconciliation is decided on the forward, not on q.** q is
+  an annual rate, and over a one-month term the same shift in the forward
+  produces twelve times the discrepancy in q
 
-### Нагрузка
+### Load
 
-- **Ограничены две разные вещи, и обе нужны.** Частота — slowapi,
-  `RATE_LIMIT` на всё и `PRICING_RATE_LIMIT` на расчёты. Одновременность —
-  семафор `limits.pricing_slot()`, которым обёрнут каждый
-  `run_in_threadpool` в `routers/pricing.py`. Лимит частоты не держит память:
-  «тридцать в минуту» не мешает всем тридцати прийти в одну секунду, а
-  Монте-Карло на пяти миллионах путей занимает 200 МБ. Семафор, в свою
-  очередь, не отказывает, а ставит в очередь
-- **Семафор создаётся по событийному циклу**, а не один на модуль:
-  `asyncio.Semaphore` привязывается к первому же циклу и в любом другом
-  падает с «bound to a different event loop»
+- **Two different things are limited, and both are needed.** Frequency, by
+  slowapi — `RATE_LIMIT` on everything and `PRICING_RATE_LIMIT` on
+  calculations. Concurrency, by the `limits.pricing_slot()` semaphore wrapped
+  around every `run_in_threadpool` in `routers/pricing.py`. A frequency limit
+  does not hold memory down: "thirty a minute" does not stop all thirty
+  arriving in the same second, and Monte Carlo on five million paths takes
+  200 MB. The semaphore, in turn, does not refuse anything — it queues
+- **The semaphore is created per event loop**, not once per module:
+  `asyncio.Semaphore` binds to the first loop that touches it and fails in any
+  other with "bound to a different event loop"
 
-### Тесты и миграции
+### Tests and migrations
 
-- **Тесты идут в свою базу `<основная>_test`.** Фикстура
-  `use_test_database` автоматическая и на всю сессию: когда подмена
-  включалась по требованию, полсотни тестов до первого её запросившего
-  успевали записать в боевую базу. Таблицы пересоздаются через `drop_all` +
-  `create_all` — `create_all` не меняет существующие, и после правки схемы
-  тестовая база молча оставалась бы прежней
-- **Без PostgreSQL `pytest` обязан быть зелёным.** Пять тестов берут
-  фикстуру `database` и пропускаются с объяснением
-- **Движок тестовой базы — с `NullPool`:** у каждого `TestClient` свой
-  событийный цикл, а пул привязывает соединения к тому, в котором их открыл
-- **`URL.render_as_string(hide_password=False)`, а не `str(url)`:** `str()`
-  подставляет вместо пароля «***»
-- **`purge_old_calculations(retention_days=0)` в тестах не вызывать** — это
-  «удалить всё», один раз уже снесло таблицу
-- **В тестах лимитер выключен** фикстурой `rate_limits_off`, иначе набор
-  упирался бы в собственную защиту
-- **Новая колонка NOT NULL на заполненной таблице проходит только с
-  `server_default`**, который сразу снимается `alter_column(server_default=None)`
-
-
+- **Tests go to their own database, `<main>_test`.** The `use_test_database`
+  fixture is autouse and session-scoped for a reason: when the swap was opt-in,
+  fifty-odd tests running before the first one that asked for it managed to
+  write history into the production database. Tables are recreated through
+  `drop_all` + `create_all` — `create_all` does not alter existing ones, so
+  after a schema change the test database would silently stay as it was
+- **`pytest` must be green without PostgreSQL.** Five tests take the `database`
+  fixture and skip with an explanation
+- **The test database engine uses `NullPool`:** every `TestClient` has its own
+  event loop, and a pool binds connections to the loop that opened them
+- **`URL.render_as_string(hide_password=False)`, not `str(url)`:** `str()`
+  puts "***" where the password should be
+- **Never call `purge_old_calculations(retention_days=0)` in a test** — it means
+  "delete everything", and it wiped the table once already
+- **The limiter is off in tests**, through the `rate_limits_off` fixture, or the
+  suite would run into its own protection
+- **A new NOT NULL column on a populated table only goes through with a
+  `server_default`**, which is dropped immediately afterwards by
+  `alter_column(server_default=None)`

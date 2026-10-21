@@ -1,127 +1,130 @@
-# Прайсинг опционов
+# Options Pricing
 
-Считает цену опциона на акцию тремя моделями сразу и показывает, насколько
-расчёт расходится с рынком. Рыночные данные берутся с Yahoo вживую.
+Prices an equity option with three models at once and shows how far the result
+sits from the market. Market data is pulled from Yahoo live.
 
-Что умеет:
+What it does:
 
-- **три модели** — Блэк-Шоулз, биномиальное дерево, Монте-Карло — и греки
-  к каждой: delta, gamma, vega, theta, rho
-- **рыночная цена этого же контракта** рядом с расчётной, с проверкой,
-  попала ли наша цена внутрь спреда
-- **волатильность на выбор**: историческая, GARCH(1,1), EGARCH(1,1) —
-  с прогнозом ровно на срок выбранного опциона
-- **улыбка волатильности** по всей цепочке страйков
-- **профили греков**: как delta и gamma меняются с ценой акции, как theta
-  ускоряется к экспирации
-- **сходимость моделей**: как дерево и Монте-Карло подбираются к точному
-  значению с ростом числа шагов и путей
-- **сверка с рынком** по паритету колла и пута — проверяет не формулы, а
-  спот, ставку и дивиденды, которые в них подставлены
+- **three models** — Black-Scholes, a binomial tree, Monte Carlo — and the
+  greeks for each: delta, gamma, vega, theta, rho
+- **the market price of the same contract** next to the computed one, with a
+  check of whether our price landed inside the spread
+- **volatility of your choice**: historical, GARCH(1,1), EGARCH(1,1) —
+  forecast over exactly the term of the option you picked
+- **the volatility smile** across the whole chain of strikes
+- **greek profiles**: how delta and gamma move with the share price, how theta
+  accelerates towards expiry
+- **model convergence**: how the tree and Monte Carlo close in on the exact
+  value as steps and paths grow
+- **market reconciliation** through put-call parity — it checks not the
+  formulas but the spot, rate and dividends fed into them
 
-Внизу страницы командная строка: то же самое можно считать с клавиатуры.
+There is a command line at the bottom of the page: the same work can be done
+from the keyboard.
 
-## Стек
+## Stack
 
-Frontend
-  Vanilla JavaScript
-  Plotly (vendored, so the page works offline)
-  CSS grid — two-column terminal dashboard with tabs
-  A command line that drives the same endpoints as the form
+**Frontend**
 
-Backend
-  Python 3.12
-  FastAPI
-  PostgreSQL
-  SQLAlchemy 2.0 (async) + Alembic
-  NumPy, SciPy
-  arch (GARCH, EGARCH)
-  slowapi (rate limiting)
+- Vanilla JavaScript
+- Plotly (vendored, so the page works offline)
+- CSS grid — two-column terminal dashboard with tabs
+- A command line that drives the same endpoints as the form
 
-External APIs
-  Yahoo Finance via yfinance
+**Backend**
 
+- Python 3.12
+- FastAPI
+- PostgreSQL
+- SQLAlchemy 2.0 (async) + Alembic
+- NumPy, SciPy
+- arch (GARCH, EGARCH)
+- slowapi (rate limiting)
 
+**External APIs**
 
-## Запуск
+- Yahoo Finance via yfinance
 
-Нужен только Docker:
+## Running it
+
+Docker is all you need:
 
 ```bash
 docker compose up
 ```
 
-Дальше http://localhost:8000
+Then open http://localhost:8000
 
-Поднимется PostgreSQL, создастся база, накатятся миграции и запустится
-приложение. Ни Python, ни PostgreSQL ставить не надо.
+PostgreSQL comes up, the database is created, migrations run and the app
+starts. Neither Python nor PostgreSQL has to be installed.
 
-## Как пользоваться
+## Using it
 
-Страница в две колонки: слева то, что вводят, справа то, что смотрят.
+The page is two columns: what you type on the left, what you read on the right.
 
-**1. Выберите бумагу** в списке слева. Подтянутся рыночные данные: цена,
-историческая волатильность за три окна, безрисковая ставка, ближайшая
-дивидендная отсечка и доступные даты экспирации.
+**1. Pick a ticker** in the list on the left. Market data loads with it: the
+spot price, historical volatility over three windows, the risk-free rate, the
+next ex-dividend date and the available expiry dates.
 
-**2. Проверьте параметры опциона.** Страйк подставляется округлённым до
-шага биржи, дата экспирации — ближайшая месячная. Переключите call/put и
-стиль исполнения, если нужно.
+**2. Check the option parameters.** The strike is filled in rounded to the
+exchange grid, the expiry is the nearest monthly one. Switch call/put and the
+exercise style if you need to.
 
-Дивидендная доходность пересчитывается при смене даты экспирации
+The dividend yield is recomputed whenever the expiry changes.
 
-**3. Выберите волатильность** — нажмите «Подобрать модели» в карточке
-«Волатильность: чем считать». Появится таблица: историческая за год, прогноз
-GARCH и прогноз EGARCH, оба ровно на срок вашего опциона. Нажмите «выбрать»
-в нужной строке, и значение подставится в форму.
+**3. Choose a volatility** — press "Подобрать модели" in the "Волатильность:
+чем считать" card. A table appears: historical over a year, the GARCH forecast
+and the EGARCH forecast, both over exactly your option's term. Press "выбрать"
+in the row you want and the value goes into the form.
 
-**4. Нажмите «Рассчитать».** Справа появится цена по модели и рядом —
-рыночная цена этого контракта, если он торгуется. Под ними греки.
+**4. Press "Рассчитать".** On the right you get the model price and, next to
+it, the market price of that contract if it trades. The greeks are underneath.
 
-Главное в этом сравнении не разница, а **попала ли расчётная цена внутрь
-спреда**. Попала — рынок с вами согласен в пределах собственной
-неопределённости. Не попала — написано, в какую сторону и почему так
-обычно бывает.
+What matters in that comparison is not the gap but **whether the computed price
+landed inside the spread**. If it did, the market agrees with you within its
+own uncertainty. If it did not, the page says which way it missed and why that
+usually happens.
 
-### Закладки справа
+### The tabs on the right
 
-| закладка | что показывает |
+| tab | what it shows |
 |---|---|
-| **Сравнение** | все три модели на одних данных, в одной таблице |
-| **Профили греков** | delta и gamma по цене акции, theta по сроку; точка на кривой — ваши параметры |
-| **Сходимость** | как дерево и Монте-Карло приближаются к точному значению |
-| **Улыбка** | подразумеваемая волатильность по всем страйкам цепочки |
-| **Сверка с рынком** | паритет колла и пута: сходятся ли наши спот, ставка и дивиденды с рыночными |
+| **Сравнение** | all three models on the same inputs, in one table |
+| **Профили греков** | delta and gamma against the share price, theta against time; the dot on the curve is your own parameters |
+| **Сходимость** | how the tree and Monte Carlo approach the exact value |
+| **Улыбка** | implied volatility across every strike in the chain |
+| **Сверка с рынком** | put-call parity: whether our spot, rate and dividends agree with the market's |
 
-### Командная строка
+### The command line
 
-Внизу — строка ввода. Команды дёргают те же расчёты, что и кнопки:
+An input line sits at the bottom. Commands trigger the same calculations as the
+buttons:
 
 ```
-use AAPL                        выбрать бумагу
-price                           пересчитать то, что в форме
-price 340 2026-10-16 call       посчитать конкретный контракт
-price --model mc --sigma 24.5   другой моделью и с другой σ
-compare                         все три модели сразу
-vol                             таблица волатильности
-smile  greeks  conv  parity     открыть соответствующую закладку
-help                            список команд
-clear                           очистить журнал
+use AAPL                        pick a ticker
+price                           recompute whatever is in the form
+price 340 2026-11-20 call       price one specific contract
+price --model mc --sigma 24.5   another model, another σ
+compare                         all three models at once
+vol                             the volatility table
+smile  greeks  conv  parity     open the matching tab
+help                            list the commands
+clear                           clear the log
 ```
 
-Аргументы необязательны: без них команда берёт то, что уже в форме.
-История — на стрелках вверх и вниз.
+Arguments are optional: without them a command takes what is already in the
+form. History is on the up and down arrows.
 
-## Запуск без Docker
+## Running it without Docker
 
-Нужны Python 3.12 и PostgreSQL.
+Python 3.12 and PostgreSQL required.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-cp .env.example .env          # вписать пароль от своего PostgreSQL
+cp .env.example .env          # put in the password of your own PostgreSQL
 
 psql -U postgres -h localhost -d postgres -f sql/00_init_db.sql
 alembic upgrade head
@@ -129,11 +132,11 @@ alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
-Без PostgreSQL приложение поднимется, но пользоваться им не выйдет: список
-бумаг останется пустым, а синхронизация вернёт ошибку — справочник негде
-хранить.
+Without PostgreSQL the app will start but will be of no use: the ticker list
+stays empty and syncing returns an error — there is nowhere to keep the
+instrument table.
 
-## Тесты
+## Tests
 
 ```bash
 pytest
@@ -141,79 +144,78 @@ pytest
 
 ## API
 
-Документация с возможностью выполнить запрос — http://localhost:8000/docs
+Interactive documentation, with a button to run each request —
+http://localhost:8000/docs
 
 ```
-POST /api/price                            цена и греки одной моделью
-POST /api/price/compare                    все три модели
-POST /api/price/convergence                сходимость дерева и Монте-Карло
-POST /api/price/profiles                   профили греков
+POST /api/price                            price and greeks, one model
+POST /api/price/compare                    all three models
+POST /api/price/convergence                convergence of the tree and Monte Carlo
+POST /api/price/profiles                   greek profiles
 
-GET  /api/instruments                      список бумаг
-GET  /api/instruments/{ticker}/market      спот, волатильность, дивиденды, ставка
-GET  /api/instruments/{ticker}/volatility  историческая, GARCH, EGARCH
-GET  /api/instruments/{ticker}/chain       цепочка опционов с подразумеваемой σ
-GET  /api/instruments/{ticker}/quote       рыночная цена контракта
-GET  /api/instruments/{ticker}/parity      сверка по паритету колла и пута
-POST /api/instruments/sync                 обновить список бумаг (нужен токен)
+GET  /api/instruments                      the ticker list
+GET  /api/instruments/{ticker}/market      spot, volatility, dividends, rate
+GET  /api/instruments/{ticker}/volatility  historical, GARCH, EGARCH
+GET  /api/instruments/{ticker}/chain       option chain with implied σ
+GET  /api/instruments/{ticker}/quote       market price of one contract
+GET  /api/instruments/{ticker}/parity      put-call parity reconciliation
+POST /api/instruments/sync                 refresh the ticker list (token needed)
 ```
 
-История расчётов пишется в таблицу `calculations`, но наружу не отдаётся:
-смотреть её полагается прямо в PostgreSQL. Записи старше трёх дней удаляет
-фоновая задача.
+Calculation history is written to the `calculations` table but is never served
+over HTTP: you are meant to read it in PostgreSQL directly. Rows older than
+three days are removed by a background task.
 
-## Настройка
+## Configuration
 
-Всё в `.env`, образец — `.env.example`. При запуске через Docker нужное уже
-задано в `compose.yml`.
+Everything lives in `.env`, see `.env.example`. When running through Docker the
+values needed are already set in `compose.yml`.
 
-| настройка | по умолчанию | что делает |
+| setting | default | what it does |
 |---|---|---|
-| `DATABASE_URL` | — | адрес PostgreSQL |
-| `MARKET_CACHE_TTL_MINUTES` | 15 | сколько считать рыночные данные свежими |
-| `CALCULATION_RETENTION_DAYS` | 3 | сколько хранить историю расчётов |
-| `MIN_QUOTED_STRIKES` | 20 | порог ликвидности для попадания в список |
-| `DEFAULT_RISK_FREE_RATE` | 0.042 | подставляется, если Yahoo не отдал ставку |
-| `RATE_LIMIT` | 120/мин | запросов с одного адреса |
-| `PRICING_RATE_LIMIT` | 30/мин | отдельно на расчёты |
-| `MAX_CONCURRENT_PRICING` | 4 | расчётов одновременно |
-| `ADMIN_TOKEN` | генерируется | токен для `POST /sync` |
+| `DATABASE_URL` | — | where PostgreSQL is |
+| `MARKET_CACHE_TTL_MINUTES` | 15 | how long market data counts as fresh |
+| `CALCULATION_RETENTION_DAYS` | 3 | how long calculation history is kept |
+| `MIN_QUOTED_STRIKES` | 20 | liquidity floor for making the list |
+| `DEFAULT_RISK_FREE_RATE` | 0.042 | used when Yahoo returns no rate |
+| `RATE_LIMIT` | 120/min | requests from one address |
+| `PRICING_RATE_LIMIT` | 30/min | a separate cap on calculations |
+| `MAX_CONCURRENT_PRICING` | 4 | calculations at the same time |
+| `ADMIN_TOKEN` | generated | token for `POST /sync` |
 
-
-Схема базы — миграциями Alembic:
+The schema is kept by Alembic migrations:
 
 ```bash
-alembic upgrade head     # привести базу к текущей схеме
-alembic current          # на какой версии база сейчас
-alembic downgrade -1     # откатить последнюю
+alembic upgrade head     # bring the database to the current schema
+alembic current          # which version the database is on
+alembic downgrade -1     # roll the last one back
 ```
 
-Строка подключения берётся из `.env`, в `alembic.ini` её нет — чтобы пароль
-не попадал в репозиторий.
+The connection string comes from `.env` and is not in `alembic.ini`, so the
+password never reaches the repository.
 
-## Служебные команды
+## Admin commands
 
-Заменить справочник бумаг целиком — удаляет то, чего нет в новом ответе
-скринера, вместе с их рыночными снимками:
+Replacing the instrument table outright — it deletes whatever is missing from
+the screener's new answer, together with their market snapshots:
 
 ```bash
 python -m scripts.sync_instruments --replace
 ```
 
-Показывает список на удаление и ждёт подтверждения. Через HTTP так сделать
-нельзя намеренно: `POST /api/instruments/sync` только дополняет и освежает.
+It prints the deletion list and waits for confirmation. Doing this over HTTP is
+deliberately impossible: `POST /api/instruments/sync` only adds and refreshes.
 
-## Структура
+## Layout
 
 ```
 app/
-├── pricing/    математика: три модели, греки, границы арбитража,
-│               подразумеваемая волатильность, паритет, GARCH
-├── services/   рыночные данные (единственное место с yfinance)
-│               и оркестрация расчёта
+├── pricing/    the math: three models, greeks, arbitrage bounds,
+│               implied volatility, parity, GARCH
+├── services/   market data (the only module that knows yfinance)
+│               and calculation orchestration
 ├── db/         SQLAlchemy async
-├── schemas/    Pydantic-контракты API
-├── routers/    HTTP-слой
-└── static/     страница: HTML, CSS, app.js, command.js
+├── schemas/    Pydantic API contracts
+├── routers/    the HTTP layer
+└── static/     the page: HTML, CSS, app.js, command.js
 ```
-
