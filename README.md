@@ -49,9 +49,10 @@ numbers you feed it are right. This project separates those two questions:
 
 **Frontend**
 
-- Vanilla JavaScript, no build step
-- Plotly (vendored, so the page works offline)
-- CSS grid — two-column terminal dashboard with tabs
+- No framework by design — the page holds three pieces of state, so a
+  renderer would solve a problem this app does not have
+- Plotly, vendored — the dashboard works with no internet and no CDN
+- Hand-built CSS: grid layout, custom properties, a dark terminal palette
 - A command line that drives the same endpoints as the form
 
 **Backend**
