@@ -47,7 +47,6 @@ def test_works_with_binomial_price(atm_call: OptionParams) -> None:
 
 
 def test_price_below_intrinsic_has_no_solution(atm_call: OptionParams) -> None:
-    # Ровно так выглядят битые котировки неликвидных страйков.
     deep = replace(atm_call, strike=50.0)
     lower, _ = bounds.price_bounds(deep)
 

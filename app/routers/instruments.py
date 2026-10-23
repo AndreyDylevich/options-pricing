@@ -33,8 +33,6 @@ async def get_instruments() -> list[Instrument]:
     return market_data.list_instruments()
 
 
-# Описание идёт в description, а не в докстроку: FastAPI берёт оттуда текст
-# для Swagger на /docs, а докстрок в коде проекта нет.
 @router.post(
     "/sync",
     summary="Обновить список бумаг из скринера Yahoo",
@@ -52,14 +50,9 @@ async def sync_instruments(
     count: int = Query(default=market_data.DEFAULT_SCREENER_COUNT, ge=1, le=250),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    # Замена списка целиком сносит бумаги, а вместе с ними каскадом и
-    # рыночные снимки — такому не место в эндпоинте, который можно дёрнуть
-    # из чужой вкладки. Токен нужен и без удаления: один вызов это полсотни
-    # обращений к Yahoo от имени пользователя, и упереться в их лимиты
-    # можно чужими руками.
+    # Токен нужен и без удаления: один вызов — полсотни обращений к Yahoo
+    # от имени пользователя.
     try:
-        # Скринер плюс проверка опционов по каждой бумаге — это десятки
-        # сетевых запросов, держать на них event loop нельзя.
         items = await run_in_threadpool(
             market_data.fetch_screener_instruments, screener, count
         )
@@ -132,8 +125,7 @@ async def get_quote(
     option_type: OptionType = Query(description="call или put"),
 ) -> ContractQuote:
     # Отдельно от расчёта цены намеренно: цепочка тянется из сети сотни
-    # миллисекунд, а сам расчёт занимает единицы. Страница спрашивает то и
-    # другое параллельно.
+    # миллисекунд, а расчёт занимает единицы.
     try:
         # yfinance ходит в сеть синхронно.
         return await run_in_threadpool(
@@ -171,7 +163,6 @@ async def get_parity(
     expiry: str = Query(description="Дата экспирации, YYYY-MM-DD"),
 ) -> ParityReport:
     try:
-        # yfinance ходит в сеть синхронно, цепочка тянется секунду.
         return await run_in_threadpool(pricing_service.parity_report, ticker, expiry)
     except market_data.InstrumentNotFound:
         raise HTTPException(
@@ -199,8 +190,6 @@ async def get_market(
     session: AsyncSession = Depends(get_session),
 ) -> MarketSnapshot:
     try:
-        # yfinance ходит в сеть синхронно: внутри event loop такой вызов
-        # заблокировал бы весь сервер на секунду-другую.
         snapshot = await run_in_threadpool(
             market_data.get_market_snapshot, ticker, refresh
         )
@@ -215,8 +204,6 @@ async def get_market(
             detail=f"Источник рыночных данных недоступен ({error})",
         ) from None
 
-    # Сохраняем только то, что действительно пришло от источника: отданное
-    # из кэша уже лежит в таблице.
     if not snapshot.cached:
         try:
             await repository.save_snapshot(session, snapshot)
@@ -239,8 +226,6 @@ async def get_volatility(
     expiry: str = Query(description="Дата экспирации, YYYY-MM-DD"),
 ) -> VolatilityReport:
     try:
-        # Пять лет истории из сети плюс две подгонки правдоподобием: и то
-        # и другое мимо event loop.
         return await run_in_threadpool(
             pricing_service.volatility_report, ticker, expiry
         )

@@ -40,13 +40,8 @@ async def post_price(
     session: AsyncSession = Depends(get_session),
 ) -> PriceResponse:
     try:
-        # Расчёт синхронный и упирается в процессор. У Блэка-Шоулза это
-        # доли миллисекунды, но дерево и Монте-Карло будут считаться
-        # сотнями миллисекунд, и держать на них event loop нельзя.
-        #
-        # Семафор ограничивает не частоту, а одновременность: Монте-Карло
-        # на пяти миллионах путей держит 200 МБ, и сорок таких расчётов,
-        # которые FastAPI пустил бы в потоки разом, съели бы всю память.
+        # Расчёт синхронный и упирается в процессор: дерево и Монте-Карло —
+        # сотни миллисекунд, держать на них event loop нельзя.
         async with pricing_slot():
             response = await run_in_threadpool(pricing_service.calculate, body)
     except market_data.InstrumentNotFound:
@@ -68,22 +63,18 @@ async def post_price(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
         ) from None
     except PriceOutOfBounds as error:
-        # Не вина пользователя: никакие входные данные не могут дать цену
-        # вне границ отсутствия арбитража. Значит сломана сама модель.
+        # Не вина пользователя: цена вне границ арбитража значит, что сломана модель.
         logger.error("Модель вернула невозможную цену: %s", error)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Внутренняя ошибка расчёта: {error}",
         ) from None
     except ValueError as error:
-        # Последний рубеж: проверки внутри OptionParams. Схема должна была
-        # отсечь это раньше, но библиотеку можно вызвать и мимо неё.
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
         ) from None
 
-    # Недоступная база не должна отнимать у пользователя посчитанную цену:
-    # результат уже есть, история — дело второе.
+    # Недоступная база не должна отнимать у пользователя посчитанную цену.
     try:
         response.calculation_id = await repository.save_calculation(
             session, body, response
@@ -114,9 +105,6 @@ async def post_compare(
     return response
 
 
-# Каждая успешная модель попадает в историю отдельной строкой: так
-# сравнение остаётся в базе наравне с одиночными расчётами и его потом
-# можно поднять запросом. Отказавшиеся модели не сохраняем — нечего.
 async def _save_comparison(
     session: AsyncSession, request: CompareRequest, response: CompareResponse
 ) -> None:
@@ -145,8 +133,6 @@ async def _save_comparison(
             logger.exception("Не удалось сохранить строку сравнения")
 
 
-# Описание эндпоинта идёт в description, а не в докстроку: FastAPI берёт
-# оттуда текст для Swagger на /docs, и докстрок в коде проекта нет.
 @router.post(
     "/price/convergence",
     summary="Сходимость дерева и Монте-Карло",
@@ -158,8 +144,6 @@ async def post_convergence(
     request: Request, body: PriceRequest
 ) -> ConvergenceReport:
     try:
-        # Полсотни построений дерева и десять симуляций: секунды процессора,
-        # event loop на них держать нельзя.
         async with pricing_slot():
             return await run_in_threadpool(pricing_service.convergence, body)
     except market_data.InstrumentNotFound:
@@ -189,8 +173,6 @@ async def post_convergence(
 @limiter.limit(settings.pricing_rate_limit)
 async def post_profiles(request: Request, body: PriceRequest) -> GreekProfiles:
     try:
-        # Сто двадцать построений для европейского стиля или шестьдесят
-        # деревьев для американского: event loop на них держать нельзя.
         async with pricing_slot():
             return await run_in_threadpool(pricing_service.greek_profiles, body)
     except market_data.InstrumentNotFound:

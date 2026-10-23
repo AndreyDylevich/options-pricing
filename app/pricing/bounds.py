@@ -7,13 +7,11 @@ from math import exp
 
 from app.pricing.models import ExerciseStyle, OptionParams, PriceOutOfBounds
 
-# Допуск на арифметику с плавающей точкой: относительный к масштабу цены
-# актива плюс абсолютный на случай нулевых цен.
+# Допуск на плавающую точку: относительный к масштабу цены плюс абсолютный.
 RELATIVE_TOLERANCE = 1e-9
 ABSOLUTE_TOLERANCE = 1e-9
 
 
-# Для европейского опциона границы такие:
 #   колл:  max(S*exp(-qT) - K*exp(-rT), 0)  <=  C  <=  S*exp(-qT)
 #   пут:   max(K*exp(-rT) - S*exp(-qT), 0)  <=  P  <=  K*exp(-rT)
 def price_bounds(params: OptionParams) -> tuple[float, float]:
@@ -27,9 +25,7 @@ def price_bounds(params: OptionParams) -> tuple[float, float]:
         lower, upper = max(strike_pv - spot_pv, 0.0), strike_pv
 
     if params.exercise is ExerciseStyle.AMERICAN:
-        # Американский стоит не меньше немедленного исполнения и не больше
-        # самого актива (колл) или страйка (пут): право исполнить сейчас
-        # поднимает пол до внутренней стоимости, а дисконтировать нечего.
+        # Американский стоит не меньше немедленного исполнения: дисконтировать нечего.
         lower = max(lower, params.intrinsic_value)
         upper = params.spot if params.is_call else params.strike
 
@@ -51,10 +47,8 @@ def violation(params: OptionParams, price: float) -> str | None:
     return None
 
 
-# Для аналитических и решёточных методов нарушение означает ошибку в коде,
-# поэтому останавливаемся. Монте-Карло вызывает не это, а violation(): у
-# него отклонение может быть следствием случайного шума, и честнее
-# предупредить, чем упасть.
+# Нарушение здесь — ошибка в коде, поэтому падаем. Монте-Карло зовёт
+# violation(): у него отклонение может быть случайным шумом.
 def require_within_bounds(params: OptionParams, price: float, model: str) -> None:
     problem = violation(params, price)
     if problem is not None:

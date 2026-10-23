@@ -15,8 +15,7 @@ from app.services import market_data
 
 TODAY = date.today()
 
-# Круглые числа вместо настоящих: 100 за акцию и выплата в 1 — чтобы
-# ожидаемое значение можно было посчитать в уме.
+
 SPOT = 100.0
 AMOUNT = 1.0
 RATE = 0.04
@@ -31,7 +30,6 @@ def history_with(ex_dates: list[date], amount: float = AMOUNT) -> pd.DataFrame:
 # Так выглядит info у компании, которая платит: прогноз на год вперёд.
 PAYING = {"dividendRate": 3.4}
 
-# А так — у свернувшей дивиденд. Ровно это отдаёт Yahoo по INTC.
 CANCELLED = {"dividendRate": None}
 
 
@@ -171,11 +169,6 @@ def test_schedule_ignores_past_announced_date() -> None:
 
 
 def test_schedule_empty_when_dividend_was_cancelled() -> None:
-    # Компания платила квартально и год назад перестала — фантомов быть не
-    # должно. Так поступил Intel в 2024-м. Пока выплаты остаются в
-    # двухлетней истории, а календарь ничего не обещает, соблазн
-    # продолжить график велик — и мы вычитали бы из цены деньги, которых
-    # не будет.
     stopped = [TODAY - timedelta(days=365 + 91 * step) for step in reversed(range(4))]
     schedule = market_data._dividend_schedule(
         history_with(stopped), FakeTicker(), TODAY + timedelta(days=200)
@@ -213,9 +206,6 @@ def test_announced_date_outweighs_long_silence() -> None:
 
 
 def test_schedule_empty_when_yahoo_says_dividend_is_gone() -> None:
-    # Отмену видно сразу по прогнозу, не дожидаясь пропущенного квартала.
-    # Выплаты шли до прошлой недели, тишины ещё нет — но dividendRate уже
-    # пуст, значит компания объявила об отмене.
     schedule = market_data._dividend_schedule(
         history_with(quarterly(4, last_days_ago=7)),
         FakeTicker(info=CANCELLED),
@@ -231,7 +221,6 @@ def test_schedule_empty_when_yahoo_says_dividend_is_gone() -> None:
     ids=["info недоступен", "поля нет", "прогноз есть"],
 )
 def test_unknown_forecast_does_not_cancel_dividend(info) -> None:
-    # Молчание Yahoo — это «не знаю», а не «отменили».
     schedule = market_data._dividend_schedule(
         history_with(quarterly(4)), FakeTicker(info=info), TODAY + timedelta(days=200)
     )
@@ -323,10 +312,6 @@ def test_yield_positive_when_ex_date_inside() -> None:
 
 
 def test_yield_reproduces_price_drop_exactly() -> None:
-    # Смысл пересчёта: S * exp(-q * T) должно дать ровно S - D. Для
-    # европейского опциона дивиденды входят в цену только этим множителем,
-    # поэтому замена дискретных выплат на ставку q — не приближение, а
-    # тождество.
     days = 40
     expiry = TODAY + timedelta(days=days)
     schedule = [payment(10), payment(35)]
@@ -406,10 +391,6 @@ def test_yield_zero_when_payments_exceed_price() -> None:
 
 
 def test_effective_yield_changes_the_price() -> None:
-    # Ради чего затевалось: на ближней экспирации цена заметно другая.
-    # Двухнедельный колл на бумагу вроде KO: отсечка 0.53 попадает внутрь
-    # срока. Со среднегодовым q её вес размазан по всему году, с
-    # эффективным — учтён целиком, и колл дешевеет.
     days = 14
     spot, rate = 88.0, 0.04
     schedule = [payment(11, amount=0.53)]

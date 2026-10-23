@@ -18,9 +18,6 @@ def quiet_series(n: int = 1500, sigma: float = 0.01) -> np.ndarray:
 
 
 def clustered_series(n: int = 1500) -> np.ndarray:
-    # Ряд с настоящими сгустками: порождён самим уравнением GARCH. Так у
-    # модели есть что находить: на белом шуме коэффициенты вырождаются и
-    # проверять было бы нечего.
     rng = np.random.default_rng(SEED)
     omega, alpha, beta = 1e-6, 0.1, 0.85
 
@@ -36,9 +33,6 @@ def clustered_series(n: int = 1500) -> np.ndarray:
 
 
 def leveraged_series(n: int = 1500) -> np.ndarray:
-    # Ряд с асимметрией: после падения волатильность растёт сильнее.
-    # Именно это EGARCH и должен поймать своим коэффициентом gamma, а
-    # GARCH не может — у него шок входит через квадрат и знак теряется.
     rng = np.random.default_rng(SEED)
     omega, alpha, beta = 1e-6, 0.05, 0.85
 
@@ -74,12 +68,6 @@ class TestFitting:
         ids=["GARCH", "EGARCH"],
     )
     def test_is_reproducible(self, fit_model) -> None:
-        # Два вызова на тех же данных дают то же число. У EGARCH
-        # прогноз симуляционный — аналитического дальше одного дня в
-        # библиотеке нет. Без фиксированного зерна таблица дёргалась
-        # бы при каждом обновлении страницы; зерно задаётся
-        # распределению, потому что аргумент random_state у forecast
-        # до выборки не доходит.
         series = clustered_series()
 
         first = fit_model(series, horizon_days=30)
@@ -89,21 +77,12 @@ class TestFitting:
         assert first.params == second.params
 
     def test_garch_finds_the_parameters_it_was_given(self) -> None:
-        # На ряде, порождённом GARCH, подгонка должна узнать своё.
-        # Точных значений не требуем — на 1500 наблюдениях оценки
-        # шумят. Требуем главного: сумма alpha и beta близка к
-        # единице, то есть модель видит долгую память волатильности, а
-        # не белый шум.
         fit = volatility.fit_garch(clustered_series(), horizon_days=30)
 
         persistence = fit.params["alpha[1]"] + fit.params["beta[1]"]
         assert 0.85 < persistence < 1.0
 
     def test_egarch_detects_asymmetry(self) -> None:
-        # На асимметричном ряде gamma у EGARCH обязана стать
-        # отрицательной. Отрицательная gamma и означает «падения
-        # раскачивают сильнее». Если знак положительный или ноль —
-        # модель асимметрию не увидела.
         fit = volatility.fit_egarch(leveraged_series(), horizon_days=30)
 
         assert fit.params["gamma[1]"] < 0
@@ -121,13 +100,6 @@ class TestFitting:
 
 class TestForecastHorizon:
     def test_term_average_differs_from_one_day(self) -> None:
-        # Средняя по сроку и прогноз на завтра — разные числа. Ради
-        # этого различения всё и сделано: в цену опциона идёт средняя,
-        # потому что цена зависит от накопленной дисперсии до
-        # экспирации. Если бы они совпадали, горизонт можно было бы не
-        # считать.
-        # Ряд, оканчивающийся всплеском: текущая дисперсия выше
-        # долгосрочной, значит прогноз должен убывать к ней.
         series = np.concatenate([quiet_series(1400, 0.005), quiet_series(100, 0.03)])
 
         fit = volatility.fit_garch(series, horizon_days=60)

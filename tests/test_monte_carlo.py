@@ -12,9 +12,6 @@ from app.pricing.models import AmericanNotSupported, ExerciseStyle, OptionParams
 
 
 def test_within_three_standard_errors(atm_call: OptionParams) -> None:
-    # Правильный критерий для случайного метода — не абсолютная ошибка.
-    # Оценка обязана попасть в окрестность точного значения шириной в три
-    # стандартные ошибки, которые модель считает сама.
     result = mc.calculate(atm_call, paths=200_000)
     exact = bs.price(atm_call)
     assert abs(result.price - exact) < 3 * result.std_error
@@ -64,9 +61,6 @@ def test_put_call_parity_on_the_sample(
 
 
 def test_sample_forward_is_close_to_true_forward(atm_call: OptionParams) -> None:
-    # Мартингальное свойство: среднее S_T сходится к форварду. Именно из-
-    # за конечной точности этого равенства паритет выше и приходится
-    # проверять на выборке, а не в теории.
     import numpy as np
 
     tau = atm_call.time_to_expiry

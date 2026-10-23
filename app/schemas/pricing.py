@@ -21,14 +21,10 @@ from app.pricing.models import (
 Positive = Annotated[float, Field(gt=0)]
 
 
-# Вынесено в базовый класс: сравнение всех трёх моделей принимает то же
-# самое, но без поля model — там считаются все.
 class OptionInputs(BaseModel):
     """Параметры опциона без выбора модели."""
 
-    # Поле называется model, а не model_name: у pydantic зарезервирован
-    # префикс model_, само слово model конфликта не вызывает, но снимаем
-    # предупреждение явно.
+    # У pydantic зарезервирован префикс model_; снимаем предупреждение явно.
     model_config = ConfigDict(protected_namespaces=())
 
     ticker: str = Field(min_length=1, max_length=10)
@@ -42,9 +38,8 @@ class OptionInputs(BaseModel):
 
     sigma: float = Field(gt=0, le=MAX_SIGMA, description="Волатильность, доля единицы")
     rate: float = Field(ge=MIN_RATE, le=MAX_RATE, description="Безрисковая ставка")
-    # Потолок высокий намеренно: q приходит из формы уже пересчитанным под
-    # конкретную экспирацию, и на коротком сроке дискретная выплата даёт
-    # большую годовую ставку. См. MAX_DIV_YIELD.
+    # Потолок высокий намеренно: q приходит пересчитанным под экспирацию,
+    # см. MAX_DIV_YIELD.
     div_yield: float = Field(
         ge=0, le=MAX_DIV_YIELD, description="Дивидендная доходность"
     )
@@ -68,8 +63,6 @@ class OptionInputs(BaseModel):
     @model_validator(mode="after")
     def check_strike_is_sane(self) -> "OptionInputs":
         # Страйк в сто раз дальше цены — почти наверняка опечатка в разряде.
-        # Считать такой опцион можно, но цена будет нулём или внутренней
-        # стоимостью, и пользователь решит, что сломался расчёт.
         ratio = self.strike / self.spot
         if not 0.01 <= ratio <= 100:
             raise ValueError(
@@ -97,8 +90,6 @@ class PriceRequest(OptionInputs):
         return self
 
 
-# Модель не указывается и стиль не ограничивается: те модели, которым
-# американский не по зубам, вернут причину отказа вместо цены.
 class CompareRequest(OptionInputs):
     """Расчёт всеми моделями сразу."""
 
@@ -138,8 +129,6 @@ class PriceResponse(BaseModel):
     greeks: GreeksOut
     meta: PriceMeta
 
-    # Идентификатор записи в истории. None означает, что расчёт прошёл, а
-    # сохранить его не удалось — база недоступна.
     calculation_id: int | None = None
 
 
@@ -157,8 +146,6 @@ class ModelComparison(BaseModel):
     ci95: tuple[float, float] | None = None
     warning: str | None = None
 
-    # Заполнено, если модель отказалась считать эти параметры: американский
-    # стиль для Блэка-Шоулза, вырожденное дерево и тому подобное.
     error: str | None = None
 
 
@@ -180,8 +167,6 @@ class TreeConvergencePoint(BaseModel):
     elapsed_ms: float
 
 
-# В отличие от дерева здесь есть лента: у случайного метода отклонение
-# имеет смысл только вместе с его собственной оценкой разброса.
 class MonteCarloConvergencePoint(BaseModel):
     """Одна точка на графике сходимости Монте-Карло."""
 
@@ -212,8 +197,7 @@ class ConvergenceReport(BaseModel):
     )
 
 
-# Массивами, а не списком точек: Plotly принимает именно массивы, и JSON
-# выходит вдвое короче на тех же данных.
+# Массивами, а не списком точек: Plotly принимает именно массивы.
 class GreekCurve(BaseModel):
     """Одна кривая профиля: как грек меняется вдоль одного параметра."""
 
@@ -224,9 +208,6 @@ class GreekCurve(BaseModel):
     current_y: float = Field(description="И значение грека в этой точке")
 
 
-# Одно число греков говорит, как поведёт себя цена при малом сдвиге.
-# Профиль показывает, что будет при большом: где дельта переломится, где
-# гамма достигнет максимума, как ускорится распад к экспирации.
 class GreekProfiles(BaseModel):
     """Профили греков вокруг заданных параметров."""
 

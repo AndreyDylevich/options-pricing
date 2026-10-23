@@ -18,8 +18,7 @@ from app.pricing.models import (
     PricingResult,
 )
 
-# Пересчёт греков в терминальные единицы: vega и rho на процентный пункт,
-# theta на календарный день.
+# Греки в терминальных единицах: vega и rho на процентный пункт, theta на день.
 PERCENTAGE_POINT = 100.0
 DAYS_IN_YEAR = 365.0
 
@@ -77,7 +76,6 @@ def greeks(params: OptionParams) -> Greeks:
     gamma = div_discount * pdf_d1 / (spot * sigma * sqrt(tau))
     vega = spot * div_discount * pdf_d1 * sqrt(tau)
 
-    # Общий для call и put член временного распада.
     decay = -spot * pdf_d1 * sigma * div_discount / (2 * sqrt(tau))
 
     if params.is_call:
@@ -116,9 +114,8 @@ def _d1_d2(params: OptionParams) -> tuple[float, float]:
     return d1, d1 - sigma * sqrt(tau)
 
 
-# Американский стиль молча считать европейским нельзя: цена получилась бы
-# заниженной без единого предупреждения, ведь право досрочного исполнения
-# стоит неотрицательно. Пусть лучше упадёт с внятной ошибкой.
+# Американский молча считать европейским нельзя: цена вышла бы заниженной
+# без единого предупреждения.
 def _require_european(params: OptionParams) -> None:
     if params.exercise is not ExerciseStyle.EUROPEAN:
         raise AmericanNotSupported(
@@ -127,18 +124,14 @@ def _require_european(params: OptionParams) -> None:
         )
 
 
-# Случаи, в которых основная формула делит на ноль.
 def _is_degenerate(params: OptionParams) -> bool:
     return params.time_to_expiry <= 0 or params.sigma <= 0
 
 
 def _degenerate_price(params: OptionParams) -> float:
-    # T = 0: опцион истекает прямо сейчас, стоит ровно внутреннюю стоимость.
     if params.time_to_expiry <= 0:
         return params.intrinsic_value
 
-    # sigma = 0: цена актива идёт детерминированно к форварду, выплата
-    # известна заранее и просто дисконтируется.
     tau = params.time_to_expiry
     forward = params.spot * exp((params.rate - params.div_yield) * tau)
 
@@ -150,8 +143,6 @@ def _degenerate_price(params: OptionParams) -> float:
     return exp(-params.rate * tau) * payoff
 
 
-# В вырожденных случаях все производные по волатильности и времени равны
-# нулю или не определены, а delta ступенчатая: единица, если в деньгах.
 def _degenerate_greeks(params: OptionParams) -> Greeks:
     in_the_money = params.intrinsic_value > 0
     delta = (1.0 if params.is_call else -1.0) if in_the_money else 0.0

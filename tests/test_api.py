@@ -12,11 +12,6 @@ from app.main import app
 
 @pytest.fixture(scope="module")
 def client() -> TestClient:
-    # Один клиент на весь модуль. TestClient поднимает собственный event
-    # loop, а пул соединений SQLAlchemy привязан к тому, в котором был
-    # создан. С клиентом на каждый тест второй запрос к базе падал бы с
-    # «Event loop is closed», причём незаметно: роутер глушит ошибки
-    # записи, чтобы недоступная база не отнимала посчитанную цену.
     with TestClient(app) as instance:
         yield instance
 
@@ -164,13 +159,7 @@ def test_compare_unknown_ticker_is_404(client: TestClient) -> None:
 
 
 def in_own_loop(work, url):
-    # Выполнить запрос к базе на одноразовом движке в своём цикле. Общий
-    # SessionFactory сюда не годится: его пул привязан к циклу TestClient,
-    # а тот между запросами закрыт. Чужой цикл роняет asyncpg на «attached
-    # to a different loop», поэтому движок создаётся и закрывается внутри
-    # той же asyncio.run. Адрес приходит из фикстуры `database` — это
-    # тестовая база, а не боевая. Брать его из настроек нельзя: там адрес
-    # приложения, и проверка смотрела бы не в ту таблицу, куда писала.
+
     import asyncio
 
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -190,10 +179,7 @@ def in_own_loop(work, url):
 
 
 def test_compare_saves_every_priced_model(client: TestClient, database) -> None:
-    # Сравнение кладёт в историю по строке на каждую посчитавшую модель.
-    # Смотрим прямо в базу: наружу история не отдаётся, эндпоинта для неё
-    # больше нет. Считаем по идентификаторам, а не по числу строк, —
-    # таблица растёт от прогона к прогону.
+
     from sqlalchemy import select
 
     from app.db.entities import Calculation
@@ -300,9 +286,6 @@ def _parity_fixture(
     our_div_yield: float,
     half_spread: float = 0.01,
 ):
-    # Цепочка, построенная при одном q, и снимок, уверенный в другом.
-    # Ровно та ситуация, ради которой сверка и написана: формулы считают
-    # верно, а подставленная в них дивидендная доходность неверна.
     from datetime import date, datetime, timedelta
 
     from app.pricing import black_scholes
@@ -360,10 +343,6 @@ def test_parity_confirms_correct_inputs(client: TestClient, monkeypatch) -> None
 
 
 def test_parity_catches_wrong_div_yield(client: TestClient, monkeypatch) -> None:
-    # Рынок живёт при 3%, мы считаем при 8% — сверка обязана это поймать.
-    # Главный тест всего модуля: ни одна внутренняя проверка такую ошибку
-    # не видит, потому что формулы при неверном q считают так же
-    # безупречно.
     expiry = _parity_fixture(monkeypatch, market_div_yield=0.03, our_div_yield=0.08)
 
     body = client.get(f"/api/instruments/KO/parity?expiry={expiry}").json()
@@ -378,12 +357,6 @@ def test_parity_catches_wrong_div_yield(client: TestClient, monkeypatch) -> None
 def test_parity_does_not_cry_wolf_on_short_terms(
     client: TestClient, monkeypatch
 ) -> None:
-    # Целый процентный пункт q на месячном сроке — это ещё не расхождение.
-    # q — ставка годовая, и на коротком сроке она пересчитывается из
-    # копеечного сдвига форварда: процентный пункт здесь даёт восемь
-    # центов на стодолларовой бумаге, вчетверо меньше спреда. Вердикт
-    # поэтому выносится по форварду, а не по q, — иначе он спорил бы с
-    # собственной построчной таблицей, где все страйки сошлись.
     expiry = _parity_fixture(
         monkeypatch, market_div_yield=0.03, our_div_yield=0.04, half_spread=0.15
     )
@@ -719,13 +692,6 @@ def test_volatility_table_lists_every_method(client: TestClient, monkeypatch) ->
     body = client.get(f"/api/instruments/KO/volatility?expiry={expiry}").json()
 
     keys = [option["key"] for option in body["options"]]
-    # Историческая одна, годовая: короткие окна на этих же данных шумят
-    # сильнее, чем меняется сама волатильность, а направление её движения
-    # уже видно в переходе GARCH от «завтра» к «за срок».
-    #
-    # Подразумеваемой в этой таблице нет намеренно: подставив её в модель,
-    # получаешь рыночную цену обратно — она из неё и выведена. Её место в
-    # цепочке опционов, рядом с улыбкой.
     assert keys == ["hist252", "garch", "egarch"]
     assert body["days_to_expiry"] == 30
     assert body["observations"] == 1300
@@ -739,9 +705,6 @@ def test_volatility_table_lists_every_method(client: TestClient, monkeypatch) ->
 
 
 def test_volatility_survives_a_short_series(client: TestClient, monkeypatch) -> None:
-    # Истории мало для GARCH — таблица всё равно приходит, но с оговоркой.
-    # Историческая по короткому окну считается и на сотне дней, и терять
-    # её из-за того, что не подогналась модель, незачем.
     from datetime import date, datetime, timedelta
 
     import numpy as np

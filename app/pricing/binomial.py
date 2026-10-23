@@ -19,27 +19,20 @@ from app.pricing.models import (
 
 DEFAULT_STEPS = 500
 
-# Один шаг — это одно движение вверх или вниз. Меньше одного дерева не
-# бывает, а выше пяти тысяч расчёт упирается во время: греки требуют пяти
-# построений, и каждое проходит все слои.
 MIN_STEPS = 1
 MAX_STEPS = 5_000
 
 DAYS_IN_YEAR = 365.0
 
-# Слои, которые нужно сохранить для греков: корень, первый и второй шаг.
 GREEK_LAYERS = 2
 
 
-# Дерево с такими параметрами не имеет смысла.
 class InvalidTreeParameters(Exception):
     pass
 
 
 def calculate(params: OptionParams, steps: int = DEFAULT_STEPS) -> PricingResult:
-    # Всего пять построений дерева: одно основное и по два на vega и rho.
-    # Delta, gamma и theta пересчёта не требуют — они снимаются с узлов,
-    # которые обратный проход и так посчитал.
+    # Пять построений дерева: одно основное и по два на vega и rho.
     started = time.perf_counter()
 
     tree = _run_tree(params, steps)
@@ -74,8 +67,6 @@ def price(params: OptionParams, steps: int = DEFAULT_STEPS) -> float:
     return _run_tree(params, steps).price
 
 
-# Цена в корне и греки, снятые с узлов. delta, gamma и theta равны None,
-# если шагов меньше двух: узлов для разностей просто нет.
 class _TreeResult:
     __slots__ = ("delta", "gamma", "price", "theta")
 
@@ -106,12 +97,9 @@ def _run_tree(params: OptionParams, steps: int) -> _TreeResult:
     if params.time_to_expiry <= 0:
         return _TreeResult(params.intrinsic_value)
 
-    # За один шаг цена либо растёт в up раз, либо падает в down раз:
     #   u = exp(sigma * sqrt(dt)),  d = 1/u
     #   p = (exp((r - q) * dt) - d) / (u - d)
-    #
-    # p — вероятность риск-нейтральная, а не реальная: она подобрана так,
-    # чтобы дисконтированная цена актива была мартингалом.
+    # p риск-нейтральная, а не реальная: дисконтированная цена — мартингал.
     dt = params.time_to_expiry / steps
     up = np.exp(params.sigma * np.sqrt(dt))
     down = 1 / up
@@ -122,20 +110,16 @@ def _run_tree(params: OptionParams, steps: int) -> _TreeResult:
 
     american = params.exercise is ExerciseStyle.AMERICAN
 
-    # Последний слой: выплата в момент экспирации.
     values = _payoff(params, _spot_layer(params.spot, up, steps))
 
     # Дерево не материализуется целиком: при обратном проходе нужен только
-    # текущий слой, поэтому память O(steps), а не O(steps**2). Храним лишь
-    # первые три слоя — с них снимаются греки.
+    # текущий слой, поэтому память O(steps). Первые три слоя — для греков.
     layers: dict[int, np.ndarray] = {}
 
     for step in range(steps - 1, -1, -1):
-        # Ожидание по двум потомкам, приведённое к текущему моменту.
         values = discount * (prob_up * values[1:] + (1 - prob_up) * values[:-1])
 
         if american:
-            # Право исполнить прямо сейчас: владелец выберет большее.
             values = np.maximum(values, _payoff(params, _spot_layer(params.spot, up, step)))
 
         if step <= GREEK_LAYERS:
@@ -154,14 +138,11 @@ def _run_tree(params: OptionParams, steps: int) -> _TreeResult:
     )
 
 
-# Цены акции во всех узлах слоя. В узле j было j движений вверх и step - j
-# вниз, а так как d = 1/u, множитель равен u**(j - (step - j)) = u**(2j - step).
 def _spot_layer(spot: float, up: float, step: int) -> np.ndarray:
     exponents = 2 * np.arange(step + 1) - step
     return spot * up**exponents
 
 
-# Выплата при немедленном исполнении в каждом узле слоя.
 def _payoff(params: OptionParams, spot: np.ndarray) -> np.ndarray:
     if params.is_call:
         return np.maximum(spot - params.strike, 0.0)
@@ -171,15 +152,12 @@ def _payoff(params: OptionParams, spot: np.ndarray) -> np.ndarray:
 def _delta_from_tree(
     layer: np.ndarray, spot: float, up: float, down: float
 ) -> float:
-    # Разность цен опциона на разность цен акции на первом шаге.
     return float((layer[1] - layer[0]) / (spot * up - spot * down))
 
 
 def _gamma_from_tree(
     layer: np.ndarray, spot: float, up: float, down: float
 ) -> float:
-    # Вторая разность по трём узлам второго шага. Средний из них вернулся в
-    # исходную цену, потому что u * d = 1.
     spot_up, spot_mid, spot_down = spot * up**2, spot, spot * down**2
 
     delta_up = (layer[2] - layer[1]) / (spot_up - spot_mid)
@@ -189,17 +167,12 @@ def _gamma_from_tree(
 
 
 def _theta_from_tree(layer: np.ndarray, root: float, dt: float) -> float:
-    # Средний узел второго шага стоит на той же цене акции, что и корень, но
-    # до экспирации ему остаётся на 2 * dt меньше. Разность между ними и
-    # есть распад во времени, без всякого пересчёта.
+    # Средний узел второго шага стоит на той же цене акции, но до экспирации
+    # ему на 2 * dt меньше: это и есть распад, без всякого пересчёта.
     per_year = (layer[1] - root) / (2 * dt)
     return float(per_year / DAYS_IN_YEAR)
 
 
-# p вне [0, 1] — это уже не вероятность. Случается, когда снос за шаг
-# (r - q) * dt выходит за пределы, достижимые движениями вверх и вниз, то
-# есть примерно за 2 * sigma * sqrt(dt). Отсюда и оценка нужного числа шагов
-# ниже: условие сводится к dt < (2 * sigma / |r - q|)**2.
 def _check_probability(
     prob_up: float, steps: int, params: OptionParams
 ) -> None:
@@ -215,8 +188,6 @@ def _check_probability(
     if needed and needed <= MAX_STEPS:
         advice = f"увеличьте число шагов примерно до {needed} (сейчас {steps})"
     else:
-        # Сказать «увеличьте шаги» здесь было бы бесполезным советом:
-        # при такой волатильности требуемое число выходит за MAX_STEPS.
         advice = (
             f"при волатильности {params.sigma:.4%} решётке потребовалось бы "
             f"больше {MAX_STEPS} шагов — возьмите Блэка-Шоулза"

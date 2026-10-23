@@ -52,11 +52,8 @@ async def save_calculation(
     return row.id
 
 
-# История наружу не отдаётся — её смотрят прямо в PostgreSQL, и держать там
-# месяцы отладочных прогонов незачем: таблица растёт от каждого нажатия
-# «Рассчитать» и от каждого прогона тестов. Отсчёт ведём от текущего момента
-# в UTC, как и `created_at`: возьми мы naive-время, сравнение с колонкой
-# timestamptz упало бы.
+# Отсчёт от текущего момента в UTC, как и created_at: naive-время уронило бы
+# сравнение с колонкой timestamptz.
 async def purge_old_calculations(
     session: AsyncSession, retention_days: int | None = None
 ) -> int:
@@ -73,8 +70,6 @@ async def purge_old_calculations(
     return result.rowcount or 0
 
 
-# Сохраняем лишь то, что реально повлияло на результат: число шагов не имеет
-# смысла в записи о расчёте по Блэку-Шоулзу.
 def _model_params(request: PriceRequest) -> dict:
     if request.model.value == "binomial":
         return {"steps": request.steps}
@@ -83,16 +78,13 @@ def _model_params(request: PriceRequest) -> dict:
     return {}
 
 
-# Мало иметь цепочку — по ней должны быть котировки. Порог задаётся
-# настройкой MIN_QUOTED_STRIKES: на бумаге, где котируются четыре страйка,
-# улыбку волатильности строить не по чему.
 async def list_instruments(session: AsyncSession) -> list[InstrumentSchema]:
     query = (
         select(Instrument)
         .where(
             Instrument.has_options.is_(True),
-            # Неизмеренные пропускаем в список: лучше показать бумагу, по
-            # которой улыбку пока не построить, чем пустой список ночью.
+            # Неизмеренные в списке остаются: лучше бумага без улыбки, чем
+            # пустой список ночью.
             or_(
                 Instrument.quoted_strikes.is_(None),
                 Instrument.quoted_strikes >= settings.min_quoted_strikes,
@@ -115,8 +107,8 @@ async def list_instruments(session: AsyncSession) -> list[InstrumentSchema]:
     ]
 
 
-# Пишется только то, что реально пришло от источника: повторно класть
-# отданное из кэша значит засорять таблицу копиями одной и той же записи.
+# Пишем только то, что пришло от источника: отданное из кэша засорило бы
+# таблицу копиями одной записи.
 async def save_snapshot(
     session: AsyncSession, snapshot: MarketSnapshotSchema
 ) -> None:
@@ -140,8 +132,6 @@ async def save_snapshot(
     await session.commit()
 
 
-# Нужен при старте: кэш в памяти после перезапуска пуст, и без этого первый
-# же выбор любой акции снова шёл бы в сеть.
 async def latest_snapshots(
     session: AsyncSession,
 ) -> list[MarketSnapshotSchema]:
@@ -184,10 +174,8 @@ async def latest_snapshots(
     ]
 
 
-# По умолчанию дополняет: скринер отдаёт самые ликвидные бумаги дня, и
-# затирать ими весь список значит терять то, что было вчера. Флаг replace
-# нужен, чтобы избавиться от накопившегося и от бумаг, прописанных в первой
-# миграции.
+# По умолчанию дополняет: скринер отдаёт ликвидных дня, и затирать ими весь
+# список значит терять то, что было вчера.
 async def sync_instruments(
     session: AsyncSession, items: list[InstrumentSchema], replace: bool = False
 ) -> dict[str, int]:
@@ -216,8 +204,6 @@ async def sync_instruments(
             for item in items
         ]
     )
-    # Тикер — первичный ключ, поэтому повторная синхронизация не падает, а
-    # освежает название, биржу и отметку времени.
     await session.execute(
         statement.on_conflict_do_update(
             index_elements=["ticker"],
@@ -247,7 +233,5 @@ async def sync_instruments(
             and item.quoted_strikes is not None
             and item.quoted_strikes < settings.min_quoted_strikes
         ),
-        # Бумаги, по которым ликвидность замерить не вышло: биржа была
-        # закрыта. Они в списке остаются, но улыбку по ним пока не построить.
         "unmeasured": sum(1 for item in items if item.quoted_strikes is None),
     }

@@ -16,9 +16,6 @@ TAU = 0.25
 
 
 def exact_pair(strike: float, call_mid: float, spread: float = 0.02):
-    # Пара колл-пут, точно удовлетворяющая паритету. Цену колла задаём
-    # произвольно, цену пута выводим из равенства: нас интересует не
-    # уровень цен, а то, что разность выдержана.
     put_mid = call_mid - (
         SPOT * math.exp(-DIV_YIELD * TAU) - strike * math.exp(-RATE * TAU)
     )
@@ -96,10 +93,6 @@ def test_forward_is_the_same_on_every_strike(strike: float) -> None:
 
 
 def test_consensus_takes_the_strikes_at_the_money() -> None:
-    # Итоговый форвард собирается у денег, где спреды уже всего. Дальним
-    # страйкам портим котировки: если бы они попадали в выборку, ответ
-    # уехал бы. «У денег» определяется по наименьшему |C - P|, то есть без
-    # единого нашего числа.
     forward = SPOT * math.exp((RATE - DIV_YIELD) * TAU)
     checks = []
 

@@ -11,12 +11,10 @@ from scipy.optimize import brentq
 from app.pricing import black_scholes, bounds
 from app.pricing.models import MAX_SIGMA, OptionParams
 
-# Границы поиска. Нижняя не ноль: при нулевой волатильности цена
-# вырождается в дисконтированную внутреннюю стоимость, и решать нечего.
+# Нижняя не ноль: при нулевой σ цена вырождается во внутреннюю стоимость.
 SIGMA_MIN = 1e-4
 SIGMA_MAX = MAX_SIGMA
 
-# Допуск на арифметику при сравнении с границами арбитража.
 PRICE_TOLERANCE = 1e-9
 
 PriceFunction = Callable[[OptionParams], float]
@@ -24,9 +22,7 @@ PriceFunction = Callable[[OptionParams], float]
 
 @dataclass(frozen=True, slots=True)
 class ImpliedVolatility:
-    # sigma равен None, если решения не существует. Это не ошибка: у
-    # неликвидных страйков рыночная цена регулярно оказывается вне
-    # достижимого моделью диапазона, и причина полезнее исключения.
+        # None, если решения нет: у неликвидных страйков это норма, а не ошибка.
     sigma: float | None
     reason: str | None = None
 
@@ -38,13 +34,7 @@ def solve(
     sigma_min: float = SIGMA_MIN,
     sigma_max: float = SIGMA_MAX,
 ) -> ImpliedVolatility:
-    # Поле sigma у params игнорируется: оно как раз и подбирается.
-    #
-    # Границы поиска вынесены в параметры не для красоты: функция цены
-    # обязана быть определена на обоих концах, а биномиальное дерево при
-    # волатильности порядка 0.01% вырождается — снос за шаг перестаёт
-    # покрываться движениями вверх и вниз. Подставляя дерево, поднимайте
-    # sigma_min.
+        # Дерево при σ порядка 0.01% вырождается — подставляя его, поднимайте sigma_min.
     if params.time_to_expiry <= 0:
         return ImpliedVolatility(None, "опцион истёк: временной стоимости нет")
 
@@ -58,9 +48,7 @@ def solve(
     def difference(sigma: float) -> float:
         return price_fn(replace(params, sigma=sigma)) - market_price
 
-    # Цена строго возрастает по волатильности, поэтому решение единственно
-    # и ищется делением отрезка. Брент, а не Ньютон: тот делит на vega, а
-    # она на далёких от денег страйках почти нулевая.
+        # Брент, а не Ньютон: тот делит на vega, а она далеко от денег почти нулевая.
     at_min = difference(sigma_min)
     at_max = difference(sigma_max)
 
@@ -77,10 +65,6 @@ def solve(
     return ImpliedVolatility(float(sigma))
 
 
-# Цена вне границ арбитража нерешаема в принципе. Отдельная проверка нужна
-# ради внятной причины: без неё пользователь получил бы одинаковое «решения
-# нет» и для явного мусора в котировках, и для цены, до которой модель
-# просто не дотягивается.
 def _outside_bounds(params: OptionParams, market_price: float) -> str | None:
     lower, upper = bounds.price_bounds(params)
     tolerance = PRICE_TOLERANCE + PRICE_TOLERANCE * params.spot

@@ -149,12 +149,6 @@ def test_prime_cache_serves_recent_snapshot(source) -> None:
 
 
 def test_prime_cache_rebuilds_effective_div_yield(source) -> None:
-    # q по экспирациям восстанавливается из графика выплат, а не из базы.
-    # В базе хранится только график отсечек: готовое q зависит от
-    # сегодняшней даты и назавтра уже неверно. Без этого пересчёта снимок,
-    # поднятый из базы, отдавал бы пустую карту, расчёт молча откатывался
-    # бы к трейлингу за 12 месяцев, и вся работа по датам отсечек
-    # переставала бы действовать до первого ручного обновления.
     from datetime import date, timedelta
 
     from app.schemas.instruments import DividendPayment
@@ -294,11 +288,6 @@ def test_unchecked_instruments_are_skipped(monkeypatch) -> None:
 
 
 def test_closed_market_leaves_liquidity_unmeasured(monkeypatch) -> None:
-    # Пока биржа закрыта, Yahoo отдаёт нулевые bid и ask по всем страйкам
-    # подряд. Ноль котировок у каждой бумаги без исключения — сообщение о
-    # рынке, а не о бумагах: записать его как неликвид значит обнулить
-    # список каждую ночь и все выходные. Проверено живьём: в 02:23 по
-    # Нью-Йорку у AAPL 60 страйков в цепочке и ни одного с котировкой.
     quotes = [
         {"symbol": name, "shortName": name, "fullExchangeName": "NYSE",
          "quoteType": "EQUITY", "currency": "USD"}
@@ -307,9 +296,6 @@ def test_closed_market_leaves_liquidity_unmeasured(monkeypatch) -> None:
     monkeypatch.setattr(
         market_data.yf, "screen", lambda name, count: {"quotes": quotes}
     )
-    # Остаточные котировки по единичным контрактам после закрытия: проверять
-    # «все нули» оказалось мало, в живом ночном замере у одиннадцати бумаг
-    # из сорока трёх нашлось от одного до девяти страйков.
     leftovers = {"AAPL": 0, "MSFT": 9, "KO": 3}
     monkeypatch.setattr(
         market_data, "_option_liquidity", lambda t: (True, leftovers[t])

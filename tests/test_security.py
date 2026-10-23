@@ -19,9 +19,6 @@ def client() -> TestClient:
 
 @pytest.fixture
 def screener(monkeypatch):
-    # Подменяем скринер: тест про доступ, а не про поход в сеть. Считаем
-    # вызовы — по ним видно, дошёл ли запрос до работы или его отбили на
-    # входе.
     from app.schemas.instruments import Instrument
     from app.services import market_data
 
@@ -45,13 +42,10 @@ class TestSyncNeedsToken:
 
         assert response.status_code == 401
         assert HEADER_NAME in response.json()["detail"]
-        # Главное: до скринера дело не дошло. Иначе чужая вкладка могла бы
-        # чужими руками выбрать лимиты Yahoo, даже получив отказ в ответ.
         assert screener["count"] == 0
 
     def test_wrong_token_is_403(self, client: TestClient, screener) -> None:
-        # Латиницей: заголовки HTTP переносят только ASCII, кириллица в
-        # значении роняет сам запрос, не дойдя до сервера.
+
         response = client.post(SYNC, headers={HEADER_NAME: "wrong-token"})
 
         assert response.status_code == 403
@@ -66,10 +60,6 @@ class TestSyncNeedsToken:
         assert screener["count"] == 1
 
     def test_empty_token_is_refused(self, client: TestClient, screener) -> None:
-        # Пустой заголовок — не то же самое, что верный токен.
-        # Сравнение идёт со случайной строкой, и пустая ей не равна,
-        # но проверить стоит: незаданный ADMIN_TOKEN не должен
-        # превращаться в «пускать всех с пустым заголовком».
         response = client.post(SYNC, headers={HEADER_NAME: ""})
 
         assert response.status_code == 403
@@ -77,15 +67,11 @@ class TestSyncNeedsToken:
 
 
 class TestSyncCannotDelete:
-    # Удаления через HTTP не осталось — это главная часть починки.
+
 
     def test_replace_parameter_is_gone(
         self, client: TestClient, screener, database
     ) -> None:
-        # Старая атака: ?count=1&replace=true оставляла одну бумагу.
-        # Лишний параметр запроса FastAPI молча игнорирует, поэтому
-        # важен не код ответа, а то, что до репозитория флаг не
-        # доедет.
         from app.db import repository
 
         seen = {}

@@ -10,19 +10,13 @@ from app.pricing.models import ExerciseStyle, OptionParams, OptionType
 from app.schemas.instruments import Instrument
 from app.services import market_data
 
-# В коде не зашито ни одного тикера: обычно реестр приходит из базы, а в
-# тестах его задаём здесь, чтобы они не зависели от того, что сегодня
-# выдал скринер.
 TEST_INSTRUMENTS = [
     Instrument(ticker="AAPL", name="Apple", exchange="NASDAQ", quoted_strikes=120),
     Instrument(ticker="KO", name="Coca-Cola", exchange="NYSE", quoted_strikes=60),
 ]
 
 
-# Имя тестовой базы получается из боевой приписыванием суффикса:
-# pricing → pricing_test. Отдельная база, а не отдельная схема, потому
-# что схему пришлось бы прописывать в каждой модели, а так приложение о
-# подмене вообще не знает.
+
 TEST_DATABASE_SUFFIX = "_test"
 
 
@@ -54,8 +48,7 @@ async def _prepare_test_database(url: str) -> None:
 
     target = make_url(url)
 
-    # Создавать базу можно только подключившись к другой: PostgreSQL не
-    # даёт выполнить CREATE DATABASE внутри транзакции к ней самой.
+
     admin = create_async_engine(
         target.set(database="postgres").render_as_string(hide_password=False),
         isolation_level="AUTOCOMMIT",
@@ -99,14 +92,7 @@ _test_database: dict[str, str] = {}
 
 @pytest.fixture(scope="session", autouse=True)
 def use_test_database():
-    # Увести всю запись из боевой базы в тестовую на время прогона.
-    # Подменяем фабрику сессий, а не настройку: приложение создаёт движок
-    # на импорте, и правка settings на него бы не подействовала. Если
-    # PostgreSQL не поднять, ничего не подменяем и запоминаем причину:
-    # тестам, которым база нужна, её сообщит фикстура `database`, а
-    # остальные шестьсот сорок два пройдут как шли. Математика базы не
-    # знает, сеть подменяется, а роутер расчёта глушит ошибки записи —
-    # чтобы недоступная база не отнимала у пользователя посчитанную цену.
+
     import asyncio
 
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -123,11 +109,7 @@ def use_test_database():
         yield
         return
 
-    # NullPool обязателен: TestClient заводит свой событийный цикл на
-    # каждый экземпляр, а пул привязывает соединения к тому циклу, в
-    # котором их открыл. С обычным пулом второй клиент получал бы чужое
-    # соединение и падал на «attached to a different loop». Цена нового
-    # соединения на запрос в тестах несущественна.
+
     engine = create_async_engine(url, poolclass=NullPool)
     original_engine = session_module.engine
     original_factory = session_module.SessionFactory
@@ -145,10 +127,6 @@ def use_test_database():
 
 @pytest.fixture
 def database(use_test_database) -> str:
-    # Адрес тестовой базы; пропуск теста, если её не подняли. Тот, кто
-    # впервые склонировал репозиторий, запускает `pytest` раньше, чем
-    # читает README, и должен увидеть зелёный прогон, а не красные строки
-    # про отказ соединения.
     url = _test_database.get("url")
     if url is None:
         pytest.skip(
@@ -160,13 +138,6 @@ def database(use_test_database) -> str:
 
 @pytest.fixture(autouse=True)
 def rate_limits_off():
-    # Выключить ограничение частоты на время теста. Иначе набор тестов
-    # упирался бы в собственную защиту: расчётных запросов за прогон около
-    # тридцати, ровно на границе лимита. Держался он лишь потому, что
-    # проверки на кривой ввод получают 422 раньше лимитера и в счёт не
-    # идут, — то есть от каждого нового теста набор мог покраснеть без
-    # всякой причины. Сам лимитер проверяется в test_limits.py, там он
-    # включается обратно.
     from app import limits
 
     was = limits.limiter.enabled

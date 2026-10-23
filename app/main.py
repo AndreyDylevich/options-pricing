@@ -20,10 +20,6 @@ from app.routers import instruments, pricing
 from app.security import admin_token
 from app.services import market_data
 
-# Корневой логгер по умолчанию стоит на WARNING, и всё, что приложение
-# пишет через logger.info, пропадает: не видно ни чистки истории, ни
-# первой синхронизации справочника. Ошибки при этом проходили и раньше —
-# у них уровень выше.
 logging.basicConfig(
     level=logging.INFO, format="%(levelname)s:     %(name)s - %(message)s"
 )
@@ -33,11 +29,7 @@ logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
 
 
-# Список бумаг и последние рыночные снимки живут в памяти, а базой только
-# подкрепляются: так после перезапуска страница не начинает с пустого списка
-# и не идёт в сеть за уже известными данными. Здесь же поднимается фоновая
-# чистка истории расчётов: наружу она не отдаётся, и старые записи в таблице
-# никому не нужны.
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     try:
@@ -52,21 +44,12 @@ async def lifespan(_: FastAPI):
 
     tasks = [asyncio.create_task(_purge_calculations_forever())]
 
-    # Наполнение пустого справочника — фоновой задачей, а не здесь.
-    # Раньше его дожидались до yield, и это оказалось ловушкой: Yahoo
-    # неофициальный источник и временами таймаутит, а пока он таймаутит,
-    # uvicorn не начинает принимать запросы вовсе. Проверено на чистом
-    # запуске: ни страница, ни /api/health не отвечали минутами, в журнале
-    # шли только предупреждения про cookie. Теперь страница открывается
-    # сразу, а список бумаг появляется, когда скринер ответит.
+    # Наполнение пустого справочника 
     if not market_data.list_instruments():
         tasks.append(asyncio.create_task(_bootstrap_instruments()))
 
     yield
 
-    # Отменяем явно и дожидаемся: без этого задача умирает вместе с
-    # событийным циклом посреди запроса к базе, и asyncio ругается на
-    # незавершённое ожидание при каждой остановке сервера.
     for task in tasks:
         task.cancel()
     for task in tasks:
@@ -76,16 +59,10 @@ async def lifespan(_: FastAPI):
     await engine.dispose()
 
 
-# Как часто подчищать историю расчётов. Час взят с запасом: за час
-# набегают десятки строк, а не десятки тысяч, и чаще ходить в базу
-# незачем. Одна чистка выполняется сразу при старте — иначе сервер,
-# который поднимают и гасят каждый день, не удалил бы ничего никогда.
+# Как часто подчищать историю расчётов
 PURGE_INTERVAL_SECONDS = 3600
 
 
-# Фоновой задачей, а не по событию записи: чистка по каждому расчёту гоняла
-# бы DELETE сотни раз в день ради нескольких строк, а чистка только при
-# старте ничего не дала бы серверу, поднятому на неделю.
 async def _purge_calculations_forever() -> None:
     while True:
         try:
@@ -103,13 +80,6 @@ async def _purge_calculations_forever() -> None:
         await asyncio.sleep(PURGE_INTERVAL_SECONDS)
 
 
-# Ни одного тикера в коде не зашито, поэтому на чистой базе список пустой.
-# Тянем его в фоне при первом старте, иначе пользователь увидел бы пустой
-# выпадающий список и не понял, что делать.
-#
-# Ошибку только пишем в журнал: Yahoo источник неофициальный, и его отказ не
-# повод мешать работе. Страница в этом случае предложит нажать
-# «Синхронизировать» вручную.
 async def _bootstrap_instruments() -> None:
     logger.info("Справочник бумаг пуст, тянем список из скринера")
 
@@ -124,8 +94,6 @@ async def _bootstrap_instruments() -> None:
         if available:
             logger.info("Справочник наполнен: %d бумаг", available)
         else:
-            # Ноль после успешного запроса — не успех: скринер ответил, но
-            # ни одна бумага не прошла порог ликвидности.
             logger.warning(
                 "Справочник пуст: ни одна бумага не прошла порог "
                 "ликвидности MIN_QUOTED_STRIKES"
@@ -137,9 +105,6 @@ async def _bootstrap_instruments() -> None:
 
 
 app = FastAPI(title="Option Pricing", version="0.1.0", lifespan=lifespan)
-
-# Общий потолок частоты запросов с одного адреса. Тяжёлые расчётные
-# эндпоинты ограничены отдельно и жёстче, см. app/limits.py.
 limits.install(app)
 
 
@@ -152,10 +117,6 @@ app.include_router(instruments.router, prefix="/api")
 app.include_router(pricing.router, prefix="/api")
 
 
-# По умолчанию FastAPI отдаёт массив объектов с англоязычными msg и
-# техническими loc вроде ["body", "sigma"]. Показывать такое на странице
-# бессмысленно, поэтому склеиваем в текст, называя поля так же, как они
-# подписаны в форме.
 @app.exception_handler(RequestValidationError)
 async def validation_handler(_: Request, error: RequestValidationError) -> JSONResponse:
     field_names = {
@@ -179,15 +140,10 @@ async def validation_handler(_: Request, error: RequestValidationError) -> JSONR
     return JSONResponse(status_code=422, content={"detail": "; ".join(messages)})
 
 
-# Пустой мета-тег в index.html, в который подставляется действующий токен.
+
 TOKEN_PLACEHOLDER = '<meta name="admin-token" content="">'
 
 
-# Отдаём не файлом, а строкой: странице нужен токен для POST /sync, а
-# держать его в app.js нельзя — тот раздаётся как статика и попадёт в
-# репозиторий. Мета-тег же виден только тому, кто может прочитать наш ответ,
-# а чужой вкладке CORS этого не позволит. Чтение файла на каждый запрос
-# ничего не стоит: страница одна и весит десятки килобайт.
 @app.get("/", include_in_schema=False)
 async def index() -> HTMLResponse:
     markup = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
